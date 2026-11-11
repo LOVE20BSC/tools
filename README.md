@@ -17,7 +17,7 @@
 ## 当前状态
 
 - 仓库骨架与工具链已建立，编译基线为 Solidity `0.8.37`、Foundry `1.8.1`、`evm_version = "osaka"`，不使用 `via_ir`。
-- `BatchTransfer` 已完成旧代码基线、改基线、单元测试三个提交，23 个用例全通过，运行时字节码 3,474 字节（EIP-170 上限 24,576）。部署脚本与部署回归测试属阶段 3，尚未落地，因此 CI 的第 5 步（`test/deploy_scripts_test.py`）暂时注释掉。
+- `BatchTransfer` 已完成旧代码基线、改基线、单元测试三个提交，23 个用例全通过，运行时字节码 3,474 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
 - 后续成员 `UniswapV2Zap` 尚未开始。
 
 ## 编译基线差异
@@ -50,7 +50,21 @@ forge build --force --deny warnings
 forge build --sizes
 forge lint
 forge test
+python3 test/deploy_scripts_test.py
 ```
+
+部署脚本的回归测试 `test/deploy_scripts_test.py` 不联网、不广播：它在临时工程根里放假的 `cast` / `forge` / `osascript`，覆盖参数文件载入、地址文件键集合与原子替换、keystore 密码经 600 临时文件传递、校验失败回滚等路径。
+
+部署（先起本地链并配好 `script/network/<network>/.account`）：
+
+```sh
+./script/deploy/one_click_deploy_batch_transfer.sh anvil31337_dev   # 一键：部署 → 校验 → 验证
+./script/deploy/11_deploy_batch_transfer.sh anvil31337_dev          # 分步：仅部署
+./script/deploy/21_check_batch_transfer.sh anvil31337_dev           # 分步：仅校验
+./script/deploy/31_verify_batch_transfer.sh anvil31337_dev          # 分步：仅开源验证
+```
+
+目录与新增网络的约定见 [`script/deploy/README.md`](script/deploy/README.md)。
 
 ## 合约
 
