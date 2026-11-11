@@ -1,0 +1,3 @@
+# Written by script/deploy/11_deploy_batch_transfer.sh after a successful deploy; see
+# script/deploy/README.md. The key set is asserted by 21_check_batch_transfer.sh.
+BATCH_TRANSFER_ADDRESS=

@@ -1,0 +1,3 @@
+# BatchTransfer has no constructor parameters: the contract is stateless and every input is a call
+# argument. The file exists so every module keeps the same shape under script/network/<network>/,
+# and so that adding a parameter later needs no new file.

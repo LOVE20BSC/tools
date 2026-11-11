@@ -1,0 +1,32 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.17"
+evm_version = "osaka"
+optimizer = true
+optimizer_runs = 200
+bytecode_hash = "none"
+cbor_metadata = false
+deny = "never"
+auto_detect_remappings = false
+
+[fuzz]
+runs = 256
+
+[invariant]
+runs = 32
+depth = 15
+fail_on_revert = false
+
+[lint]
+severity = ["high", "med", "low"]
+ignore = ["test/**/*.sol"]
+# missing-zero-check: 构造函数的静态零值校验由部署脚本负责（dev-standards §5.7）；
+# 具体构造函数用行内抑制，不整类禁用。
+exclude_lints = ["calls-loop", "reentrancy-events", "unused-return"]
+# Same policy as core:
+# - calls-loop: per-round settlement needs fresh external state (supply, votes, proposals)
+# - reentrancy-events: events after view calls are safe; no state changes possible
+# - unused-return: tuple elements intentionally ignored where the count is already known
+# These warning types cannot be suppressed with inline comments in this Foundry version.
