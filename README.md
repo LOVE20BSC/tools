@@ -143,6 +143,14 @@ python3 test/deploy_scripts_test.py
 
 目录与新增网络的约定见 [`script/deploy/README.md`](script/deploy/README.md)。
 
+## 端到端检查
+
+```sh
+script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工具 → 实调 → 还原
+```
+
+在一个一次性 anvil 链上从空链开始，部署 Uniswap V2 依赖栈、跑两个工具各自的 `one_click_deploy_<tool>.sh`、然后真的转账与加池，最后核对 Zap 零残留与两个自定义错误的 selector。它验证的是 `script/deploy/` 这条路径本身，包括单元测试覆盖不到的字节码与真实 Router 行为；退出时无论成败都还原地址文件，工作树不会被弄脏。前置条件与取舍见 [`script/e2e/README.md`](script/e2e/README.md)。
+
 ## 事件设计：为什么是汇总而非逐笔
 
 `event-standards.md` 有一条「不得用一条汇总事件替代 N 条事实」。**这条规则不适用于本合约**，理由如下，记在这里以免以后被当成疏漏整改：
