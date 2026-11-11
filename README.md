@@ -13,7 +13,7 @@
 
 本仓**不声明任何协议子模块**：工具合约按定义不依赖 `core` / `action` / `group-chat` / `dex`，需要的标准接口（如 ERC20 的最小读法）在本仓 `src/interfaces/` 内自行声明，避免为一个函数引入整条依赖链。`remappings.txt` 因此只有 `@forge-std/` 一条。
 
-`src/interfaces/` 是本仓自有 ABI 的唯一来源（开发规范 §4.1）：`IBatchTransfer.sol` 声明本合约的函数、事件与错误，`IERC20Minimal.sol` 只是「最小 ERC20 编码接口」——它仅声明 `BatchTransfer` 会编码的 `balanceOf` / `allowance` / `transferFrom` 三个 selector，不是 LOVE20 自有 ABI，也不代表本仓认领 ERC20 标准；放在同一目录只为让本仓所有 ABI 声明只有一个位置。
+`src/interfaces/` 是本仓自有 ABI 的唯一来源（开发规范 §4.1）：`IBatchTransfer.sol` 与 `IUniswapV2Zap.sol` 分别声明两个合约的函数、事件与错误；`IERC20Minimal.sol`、`IUniswapV2Factory.sol`、`IUniswapV2Pair.sol`、`IUniswapV2Router02.sol`、`IWrappedNative.sol` 是最小外部调用面——各自只声明对应实现会编码的 selector，不是 LOVE20 自有 ABI，也不代表本仓认领 ERC20 / Uniswap V2 / WETH9 标准；放在同一目录只为让本仓所有 ABI 声明只有一个位置。
 
 依赖版本固定在同一提交的 `.gitmodules` + `foundry.lock`；规则见 [合约开发规范](https://github.com/LOVE20BSC/matt-gov/blob/main/docs/dev-standards.md) §3.2。
 
@@ -21,7 +21,7 @@
 
 - 仓库骨架与工具链已建立，编译基线为 Solidity `0.8.37`、Foundry `1.8.1`、`evm_version = "osaka"`，不使用 `via_ir`。
 - `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，之后追加一个规范整改提交。27 个用例全通过（24 个合约用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,495 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
-- 后续成员 `UniswapV2Zap` 尚未开始。
+- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**第一步（合约 + 接口 + 最小测试骨架）已完成**：`src/UniswapV2Zap.sol`、`src/interfaces/IUniswapV2Zap.sol` 与四个最小外部接口落地，`test/UniswapV2Zap.t.sol` 目前只有 6 个骨架用例（构造函数、`receive`、两条 happy path、`testNoAdminFunctions`），运行时字节码 9,453 字节。完整的迁移用例、部署脚本与地址参数文件属第二步。
 
 ## 与旧仓的差异
 
