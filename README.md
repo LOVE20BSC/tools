@@ -20,6 +20,28 @@
 - `BatchTransfer` 已完成旧代码基线、改基线、单元测试三个提交，23 个用例全通过，运行时字节码 3,474 字节（EIP-170 上限 24,576）。部署脚本与部署回归测试属阶段 3，尚未落地，因此 CI 的第 5 步（`test/deploy_scripts_test.py`）暂时注释掉。
 - 后续成员 `UniswapV2Zap` 尚未开始。
 
+## 编译基线差异
+
+本仓的编译基线是 Solidity `0.8.37`、`evm_version = "osaka"`、`cbor_metadata = false`。`BatchTransfer` 迁移自 `LOVE20TKM/batch-transfer@5bc194c`，旧仓基线是 Solidity `0.8.17`，`foundry.toml` 未设置 `evm_version`，`cbor_metadata` 则本来就写了 `false`。
+
+| 项目 | 旧仓 `batch-transfer@5bc194c` | 本仓 |
+| --- | --- | --- |
+| `solc_version` | `0.8.17` | `0.8.37` |
+| `evm_version` | 未设置，Foundry 对 0.8.17 解析为 `london`（无 `PUSH0`） | `osaka`（启用 `PUSH0`） |
+| `cbor_metadata` | `false`，但对 0.8.17 是空操作（见下） | `false`（真正剥离 metadata 尾） |
+| ABI（排序键 JSON）sha256 | `6f03a9bc333ff959cd37b30c0381a6c0d520d31b4e6182641c7d3ab218e87a9a` | 同一值 |
+| runtime 字节码 | 3,678 字节 | 3,474 字节 |
+
+所以同一个合约源码在两仓编译出来：**ABI 逐字节相同**，**运行时字节码不同**（3,678 → 3,474，少 204 字节）。差异有三处来源，都不是逻辑变更：
+
+- **`evm_version`（约 116 字节）**：`osaka` 启用 `PUSH0`，`london` 不产出该指令。字节码开头 `61004a` 与 `610049` + `5f` 的差别即由此而来。
+- **编译器版本（约 75 字节）**：`0.8.17` 与 `0.8.37` 的代码生成不同，同样的源码编译结果本身就有出入。
+- **metadata（13 字节）**：本仓 `cbor_metadata = false` 真正剥离了 solc 写在字节码末尾的 metadata。旧仓虽然也写了 `cbor_metadata = false`，但 solc `0.8.17` 不支持 `appendCBOR` 设置（该选项 `0.8.18` 才加入），Foundry 传不下去，所以旧仓产物末尾仍有 `...fea164736f6c6343000811000a`。
+
+注：旧仓 `evm_version` 未设置时，Foundry 对 `0.8.17` 解析为 `london` 而非 `paris`——`paris` 这个 EVM 版本要到 solc `0.8.18` 才支持，`0.8.17` 指定它会直接编译报错。`london` 与 `paris` 都不产出 `PUSH0`，所以"旧仓没有 `PUSH0`"这个结论不变。
+
+结论：迁移前后**没有逻辑变更**，依据是 ABI 完全一致、23 个测试原样全过。这一节的作用是让未来的审计者与集成方知道：这份字节码差异是预期的编译基线差异，不是篡改——核对时以 ABI 与测试为准，不要直接比对字节码。
+
 ## 构建与测试
 
 ```sh
