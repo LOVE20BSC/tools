@@ -19,7 +19,7 @@
 ## 当前状态
 
 - 仓库骨架与工具链已建立，编译基线为 Solidity `0.8.37`、Foundry `1.8.1`、`evm_version = "osaka"`，不使用 `via_ir`。
-- `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，26 个用例全通过（23 个迁移用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,474 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
+- `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，之后追加一个规范整改提交。27 个用例全通过（24 个合约用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,495 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
 - 后续成员 `UniswapV2Zap` 尚未开始。
 
 ## 与旧仓的差异
@@ -41,6 +41,8 @@
 
 依据：`dev-standards.md` §5.1 要求事件名用过去式。字段名 `token` 同时改为 `tokenAddress`（`event-standards.md` §6.4），只改字段名不改变类型序列，对 topic0 无额外影响。
 
+**函数参数名：`token` → `tokenAddress`（2 个入口）。** 参数名不进 selector，5 个函数的选择器全部不变；但参数名是 ABI JSON 的 `name` 字段，属于集成方 API（`naming-standards.md` §十：「`address` 类型的实体参数/字段必须带 `Address` 后缀」，§十一：参数名 = 结构体字段名 = 事件字段名，四处同源）。因此 `batchTransferERC20` 与 `erc20Balances` 的入参同步改名——**改的是参数名，不是函数名**，因为函数名进 selector 而参数名不进。
+
 **错误：13 个，其中 7 个未变、6 个改变。**
 
 未变：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`、`ERC20InsufficientBalance(address,address,uint256,uint256)`、`ERC20InsufficientAllowance(address,address,address,uint256,uint256)`。
@@ -60,7 +62,17 @@
 
 ### 逻辑语义未变的依据
 
-ABI 变了，所以不能再用「ABI 一致」证明行为未变。现在的依据是：**23 个迁移测试用例原样保留、断言强度未降、全部通过**（另有 3 个部署脚本用例）。测试逐条覆盖了旧仓的每个入口、每条 revert 路径与每个边界，因此签名变更是改名与载荷形态变化，不是行为变化。
+ABI 变了，所以不能再用「ABI 一致」证明行为未变——**这一节不再把 ABI 一致性当作「无逻辑变更」的证据**。现在的依据是：**23 个迁移测试用例逐条保留、断言强度未降、全部通过**，另加 1 个新增用例覆盖空返回数据边界（共 24 个合约用例 + 3 个部署脚本用例）。
+
+按变更性质分三类：
+
+- **纯格式**（不影响 ABI、不影响字节码语义）：`emit` 改具名参数（kv）形式；多参数 `error` 声明拆行；`IERC20Minimal` 从实现文件抽到 `src/interfaces/`。这三项由 `dev-standards.md` §5.1 与 §4.1 要求。
+- **签名变更**（改变 ABI，不改变行为）：5 个 error 的 `bytes` 载荷改为 `bytes32` + `uint256`；`InvalidToken` → `TokenNotContract`；2 个事件改名；事件与 error 的字段/参数 `token` → `tokenAddress`。这些是**公开 ABI 的形态变化**，函数选择器与调用语义一个都没动。
+- **实现变更**（为支撑签名变更）：新增私有 `_errorFingerprint(bytes memory) → (bytes32, uint256)`，在 5 个 revert 站点集中做 `keccak256(data)` + `data.length`。行为差异只有一处且是新增能力：错误不再携带无界数据。
+
+**断言强度为什么没降**：原来断言的是 revert data 里的完整 `bytes`（`abi.encode(false)`、`hex"01"`、`Error(string)` 编码等），现在断言的是同一段数据的 `keccak256` 与长度——内容仍然被逐字节锁住（哈希碰撞在这些固定短输入上不是现实风险），且**新增**了原来没有的长度断言。事件侧 `expectEmit` 的 `checkTopic1/2/3` 与 data 比对保持不变，只改了字段名。
+
+**新增用例**：`testRevertsOnEmptyBalanceQueryReturn`。原来没有覆盖「外部调用成功但返回 0 字节」这条路径——旧实现里 `data.length == 0` 会让 `keccak256(bytes(""))` 成为有效哈希、`errorLength = 0`，这是新载荷形态下一个必须钉住的边界。
 
 ## 编译基线差异
 
@@ -71,17 +83,21 @@ ABI 变了，所以不能再用「ABI 一致」证明行为未变。现在的依
 | `solc_version` | `0.8.17` | `0.8.37` |
 | `evm_version` | 未设置，Foundry 对 0.8.17 解析为 `london`（无 `PUSH0`） | `osaka`（启用 `PUSH0`） |
 | `cbor_metadata` | `false`，但对 0.8.17 是空操作（见下） | `false`（真正剥离 metadata 尾） |
-| runtime 字节码 | 3,678 字节（末尾含 12 字节 metadata 尾） | 3,474 字节（无 metadata 尾） |
-| 去掉 metadata 尾后的 runtime | 3,666 字节 | 3,474 字节（本来就无尾） |
+| runtime 字节码 | 3,678 字节（末尾含 12 字节 metadata 尾） | 3,495 字节（无 metadata 尾） |
+| 去掉 metadata 尾后的 runtime | 3,666 字节 | 3,495 字节（本来就无尾） |
 
-实测口径：旧仓 runtime 的末 12 字节是 `a164736f6c6343000811000a`，按 CBOR 解码为 `{"solc": "0.8.17"}` 的 compact 编码，结构是 `a1`（1 项 map）+ `64`（4 字节文本）+ `"solc"` + `43`（3 字节 byte string）+ `000811`（= 0.8.17）+ `000a`（其后 10 字节 metadata）；共 **12 字节**。3,678 − 12 = 3,666。本仓 runtime 末尾没有这段，直接就是 3,474。
+实测口径：旧仓 runtime 的末 12 字节是 `a164736f6c6343000811000a`，按 CBOR 解码为 `{"solc": "0.8.17"}` 的 compact 编码，结构是 `a1`（1 项 map）+ `64`（4 字节文本）+ `"solc"` + `43`（3 字节 byte string）+ `000811`（= 0.8.17）+ `000a`（其后 10 字节 metadata）；共 **12 字节**。3,678 − 12 = 3,666。本仓 runtime 末尾没有这段，直接就是 3,495。
 
-两个总量相差 204 字节（3,678 − 3,474）；把 metadata 尾按长度扣掉后，剩下的 192 字节（3,666 → 3,474）才是代码生成本身的差异，来源有两处：
+**这组数字不能用来证明"没有逻辑变更"。** 本仓整改了 ABI（见上一节），源码不同，runtime 本来就不该一致；3,474 是**整改前**（`072d30c` 工作树）的字节数，整改后是 3,495，多出的 21 字节就是有界错误载荷与改名带来的。下表只用于说明「在同一份源码上，编译基线本身会造成多大的字节码差」。
 
-- **`evm_version`（116 字节）**：`osaka` 启用 `PUSH0`，`london` 不产出该指令。这一项可单独测：把本仓 `evm_version` 临时改回 `london` 重编译，runtime 为 3,590 字节，3,590 − 3,474 = 116。
-- **编译器版本（76 字节）**：`0.8.17` 与 `0.8.37` 的代码生成不同，同样的源码编译结果本身就有出入。3,666 − 3,590 = 76。
+下表按**整改前的源码**（runtime 3,474）测量，因为只有那一版与旧仓源码等价，差值才有意义：
 
-116 + 76 = 192，因此这个分解是自洽的：204（总量差）= 12（metadata 尾）+ 116（evm_version）+ 76（编译器版本）。
+- **`evm_version`（116 字节）**：`osaka` 启用 `PUSH0`，`london` 不产出该指令。实测：同一份源码把 `evm_version` 改回 `london` 重编译，runtime 3,590 字节，3,590 − 3,474 = 116。
+- **编译器版本（76 字节）**：`0.8.17` 与 `0.8.37` 的代码生成不同。3,666 − 3,590 = 76。
+
+116 + 76 = 192，因此分解自洽：204（3,678 − 3,474 总量差）= 12（metadata 尾）+ 116（evm_version）+ 76（编译器版本）。
+
+对**整改后**的源码做同一测量：`osaka` 为 3,495，`london` 为 3,597，两者相差 102 字节——`PUSH0` 的节省量随代码形状浮动，不是固定 116，所以上面那个 116 只对整改前的那版源码成立，不要外推。
 
 **注意不要把这 12 字节当成"剥 metadata 的收益"**：这里的 12 是旧仓产物末尾那段的实际长度，不是"本仓剥离 metadata 让字节码少了 12 字节"。旧仓之所以留着这段，是因为 solc `0.8.17` 不支持 `appendCBOR` 设置（该选项 `0.8.18` 才加入），Foundry 传不下去，`cbor_metadata = false` 对它是空操作；而剥离 metadata 后 solc 会重新布局代码，差值未必正好等于尾段长度，所以本仓只陈述实测值，不推断"关掉 metadata 省了多少"。
 
@@ -124,8 +140,8 @@ python3 test/deploy_scripts_test.py
 **做什么**。一个无状态的批量转账与批量查询工具，四个入口：
 
 - `batchTransferNative(address[] recipients, uint256[] amounts)` —— 按 `amounts` 逐笔转原生币，要求 `msg.value` 等于 `amounts` 之和；每笔固定转发 `NATIVE_TRANSFER_GAS_LIMIT`（50,000）gas，避免单个收款方吞掉整笔预算。
-- `batchTransferERC20(address token, address[] recipients, uint256[] amounts)` —— 先校验 `token` 有代码，再一次性核对发送方余额与对本合约的授权额度，通过后才逐笔 `transferFrom`。
-- `nativeBalances(address[] accounts)` / `erc20Balances(address token, address[] accounts)` —— 批量读余额，同样先校验 `token` 有代码。
+- `batchTransferERC20(address tokenAddress, address[] recipients, uint256[] amounts)` —— 先校验 `tokenAddress` 有代码，再一次性核对发送方余额与对本合约的授权额度，通过后才逐笔 `transferFrom`。
+- `nativeBalances(address[] accounts)` / `erc20Balances(address tokenAddress, address[] accounts)` —— 批量读余额，同样先校验 `tokenAddress` 有代码。
 
 批量要么全成、要么全回滚：任何一笔失败都会 revert 整笔交易，并带上失败元素的下标（`NativeTransferFailed`、`ERC20TransferFailed`、`ERC20InvalidReturn` 等都带 `index`）。零收款地址与零金额被拒绝，空批次与数组长度不一致被拒绝。ERC20 一侧同时接受标准布尔返回与无返回值的旧式代币，返回数据短于 32 字节视为失败。
 
