@@ -74,7 +74,7 @@ interface IUniswapV2ZapErrors {
     error IdenticalTokens();
     error WrappedNativeTokenNotAccepted();
     error ZeroRecipientAddress();
-    error ZeroAmount();
+    error ZeroInputAmounts();
     error PairMissingOrEmpty();
     error InsufficientLiquidity();
     error InsufficientInitialLiquidity();
@@ -89,17 +89,17 @@ interface IUniswapV2ZapErrors {
         uint256 amount,
         uint256 maxAmount
     );
-    error NativeTransferFailed();
+    error NativeRefundFailed();
 }
 
 interface IUniswapV2Zap is IUniswapV2ZapEvents, IUniswapV2ZapErrors {
     receive() external payable;
 
-    function router() external view returns (IUniswapV2Router02);
+    function ROUTER() external view returns (IUniswapV2Router02);
 
-    function factory() external view returns (address);
+    function FACTORY() external view returns (address);
 
-    function wrappedNativeToken() external view returns (address);
+    function WRAPPED_NATIVE_TOKEN() external view returns (address);
 
     function zapToken(ZapTokenParams calldata params)
         external

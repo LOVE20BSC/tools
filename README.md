@@ -203,7 +203,7 @@ python3 test/deploy_scripts_test.py
 
 **与 LOVE20 协议的关系**：**Zap 不依赖任何 LOVE20 合约**。它只认识 `IUniswapV2Router02`/`IUniswapV2Factory`/`IUniswapV2Pair`/`IWrappedNative` 这四个外部调用面，是通用 DEX 工具。它在 `LOVE20TKM` 里之所以"服务于 LOVE20 代币"，只是因为部署时把 `router` 指向了同一个 Uniswap V2 Factory——同一条 Factory 上有 LOVE20 代币的池子，于是这个工具对它们可用。换成任意别的 V2 部署，同一个字节码一样工作。本仓 `src/interfaces/` 里的四个 Uniswap 接口也按这个定位声明：只写本合约实际编码的 selector，不复制上游完整接口。
 
-**地址文件**：部署后地址写入 `script/network/<network>/addresses.uniswap-v2-zap.params`，键名 `UNISWAP_V2_ZAP_ADDRESS`；`22_check_uniswap_v2_zap.sh` 会断言键集合恰好等于期望合约集合，并在回读时把 `router()` / `factory()` / `wrappedNativeToken()` 三个 getter 与预期逐项核对。
+**地址文件**：部署后地址写入 `script/network/<network>/addresses.uniswap-v2-zap.params`，键名 `UNISWAP_V2_ZAP_ADDRESS`；`22_check_uniswap_v2_zap.sh` 会断言键集合恰好等于期望合约集合，并在回读时把 `ROUTER()` / `FACTORY()` / `WRAPPED_NATIVE_TOKEN()` 三个 getter 与预期逐项核对。
 
 Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，按 `dev-standards` §6.2 以"复制被依赖方的地址文件"的方式引入——`script/network/<network>/addresses.uniswapv2.params` 是从 `LOVE20BSC/dex` 同名文件**逐字节复制**过来的（键名 `FACTORY_ADDRESS` / `ROUTER_ADDRESS`，由 `dex` 生产，本仓不得改写）。`dex` 重新部署后重抄这一个文件即可同步，不需要手工转抄或在两个地方各记一份。模块参数文件 `script/network/<network>/uniswap-v2-zap.params` 因此只含注释。
 
@@ -218,7 +218,11 @@ Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，�
 | `error InsufficientLiquidityMinted()`（一处 selector 承载 5 类条件） | `SlippageExceeded(uint256 actual, uint256 minAmount)` / `InsufficientInitialLiquidity()` / `SwapOutputZero()` / `OptimalAmountZero()` / `LiquidityMintedZero()` | `error-standards` §2 一条件一错误；载荷按 §4，上限用 `actual + limit` |
 | `error AmountTooLarge()` | `error AmountExceeded(uint256 amount, uint256 maxAmount)` | `error-standards` §3 数值上限统一用 `<Subject>Exceeded`，§4 载荷为 `actual + limit`；两处 `\|\|` 合并的条件拆成逐个检查，因此负载能定位到超限的那一侧金额 |
 | `error InvalidRatio()` | **删除** | `error-standards` §八「不保留不可达错误」。两处调用点都用与守卫完全相同的比较选好了兑换方向（见下），守卫恒为假 |
-| `PairMissingOrEmpty` / `InsufficientLiquidity` / `NativeTransferFailed` / `ZeroTokenA` / `ZeroTokenB` 等 | 同名保留 | 这些名字的载荷与句式仍有可议之处（见下节），但不在本次范围内，改动会破坏已冻结的 selector |
+| `error ZeroAmount()` | `error ZeroInputAmounts()` | 与 `BatchTransfer` 的 `ZeroAmount(uint256 index)` 同名但签名不同，`check_errors.py` 判为「同一错误名多种签名」。Zap 的条件是「两个输入都是零」（AND），与批量转账的「第 i 项为零」（OR 逐项）不是同一个失败，改名才能区分 |
+| `error NativeTransferFailed()` | `error NativeRefundFailed()` | 同上：与 `BatchTransfer` 的批量失败同名不同签名。Zap 只在一处用——把多余原生币退还给调用方失败 |
+| `router()` / `factory()` / `wrappedNativeToken()`（`public immutable`） | `ROUTER()` / `FACTORY()` / `WRAPPED_NATIVE_TOKEN()` | `naming-standards` §3.1「部署后冻结 = 全大写，与它是 `constant`、`immutable` 还是 `init` 写入的存储无关」，并明确这是有意偏离 OZ 的 camelCase 惯例。三个值构造后不再变，因此全大写；**getter 选择器随之改变** |
+| `_validatePair` / `_validateTransferBatch` / `_requireTokenContract` | `_checkPair` / `_checkTransferBatch` / `_checkTokenContract` | `naming-standards` §4.1：守卫用 `_check<宾语>`，`_validate*`、`_require*` 不是允许的形态（`check_naming.py` N24）。内部函数，不影响 ABI |
+| `PairMissingOrEmpty` / `InsufficientLiquidity` / `ZeroTokenA` / `ZeroTokenB` 等 | 同名保留 | 这些名字的载荷与句式仍有可议之处（见下节），但不在本次范围内，改动会破坏已冻结的 selector |
 
 `InvalidRatio` 删除的依据：`_calcAmountToSwap` 的守卫是 `amountIn * reserveOut < reserveIn * amountOutAlready`，而 `_quoteZapPair` 只在 `amountAIn * reserveB >= reserveA * amountBIn` 分支里调用它（否则交换两个操作数再调用），`_swapExcess` 同样由该比较保护。因此进入函数时守卫必然为假，紧接的减法不可能下溢；代码里留了一行注释记录这个不变式。测试侧不再引用已删除的声明，而是把该签名的选择器冻结成字面量 `0x648564d3`（`cast sig "InvalidRatio()"`），用探测用例证明任何输入都不会以它 revert——这样既删了死声明，又保留了「它确实不可达」的证据。
 
@@ -228,4 +232,4 @@ Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，�
 
 1. `ZeroTokenA()` / `ZeroTokenB()` —— 把参数位置编进了名字，不是 `Zero<Field>` 形态。建议合并为 `ZeroTokenAddress(uint256 index)`，或保持现状（两个错误各自只判一个位置，读起来更直接）。
 2. `InsufficientLiquidity()` —— 缺口语义符合 `Insufficient*`，但无载荷；它与 `InsufficientInitialLiquidity()` 不重复（前者是池子储备为零、公式无解，后者是新池输入太小、铸不出 MINIMUM_LIQUIDITY）。该条件下没有任何可用数值（储备就是 0），按 §4「没有行动价值时省略载荷」保持无载荷成立。
-3. `NativeTransferFailed()` —— `*Failed` 句式符合 §3；载荷按 §4「没有行动价值时省略载荷」可以不加（失败方是 `to`，调用方自己知道），保持无载荷。
+3. `NativeRefundFailed()` —— `*Failed` 句式符合 §3；载荷按 §4「没有行动价值时省略载荷」可以不加（失败方是 `to`，调用方自己知道），保持无载荷。

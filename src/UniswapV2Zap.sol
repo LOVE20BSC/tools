@@ -22,23 +22,23 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
     uint256 private constant UNISWAP_V2_MINIMUM_LIQUIDITY = 1000;
     uint256 private constant UNISWAP_V2_MAX_RESERVE = type(uint112).max;
 
-    IUniswapV2Router02 public immutable override router;
-    address public immutable override factory;
-    address public immutable override wrappedNativeToken;
+    IUniswapV2Router02 public immutable override ROUTER;
+    address public immutable override FACTORY;
+    address public immutable override WRAPPED_NATIVE_TOKEN;
 
     constructor(address routerAddress) {
         if (routerAddress == address(0)) revert ZeroRouter();
 
-        router = IUniswapV2Router02(routerAddress);
-        factory = IUniswapV2Router02(routerAddress).factory();
-        wrappedNativeToken = IUniswapV2Router02(routerAddress).WETH();
+        ROUTER = IUniswapV2Router02(routerAddress);
+        FACTORY = IUniswapV2Router02(routerAddress).factory();
+        WRAPPED_NATIVE_TOKEN = IUniswapV2Router02(routerAddress).WETH();
 
-        if (factory == address(0)) revert ZeroFactory();
-        if (wrappedNativeToken == address(0)) revert ZeroWrappedNativeToken();
+        if (FACTORY == address(0)) revert ZeroFactory();
+        if (WRAPPED_NATIVE_TOKEN == address(0)) revert ZeroWrappedNativeToken();
     }
 
     receive() external payable override {
-        if (msg.sender != wrappedNativeToken) revert NativeTokenNotAccepted();
+        if (msg.sender != WRAPPED_NATIVE_TOKEN) revert NativeTokenNotAccepted();
     }
 
     function zapToken(ZapTokenParams calldata params)
@@ -47,9 +47,9 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         nonReentrant
         returns (uint256 amountA, uint256 amountB, uint256 liquidity)
     {
-        _validatePair(params.tokenA, params.tokenB);
+        _checkPair(params.tokenA, params.tokenB);
         if (params.to == address(0)) revert ZeroRecipientAddress();
-        if (params.amountAIn == 0 && params.amountBIn == 0) revert ZeroAmount();
+        if (params.amountAIn == 0 && params.amountBIn == 0) revert ZeroInputAmounts();
 
         uint256 balanceABefore = IERC20(params.tokenA).balanceOf(address(this));
         uint256 balanceBBefore = IERC20(params.tokenB).balanceOf(address(this));
@@ -88,18 +88,18 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         uint256 deadline
     ) external payable override nonReentrant returns (uint256 amountToken, uint256 amountNative, uint256 liquidity) {
         if (tokenAddress == address(0)) revert ZeroToken();
-        if (tokenAddress == wrappedNativeToken) revert WrappedNativeTokenNotAccepted();
+        if (tokenAddress == WRAPPED_NATIVE_TOKEN) revert WrappedNativeTokenNotAccepted();
         if (to == address(0)) revert ZeroRecipientAddress();
-        if (msg.value == 0 && amountTokenIn == 0) revert ZeroAmount();
+        if (msg.value == 0 && amountTokenIn == 0) revert ZeroInputAmounts();
 
         uint256 tokenBalanceBefore = IERC20(tokenAddress).balanceOf(address(this));
-        uint256 wrappedNativeBalanceBefore = IERC20(wrappedNativeToken).balanceOf(address(this));
+        uint256 wrappedNativeBalanceBefore = IERC20(WRAPPED_NATIVE_TOKEN).balanceOf(address(this));
 
         if (amountTokenIn > 0) {
             IERC20(tokenAddress).safeTransferFrom(msg.sender, address(this), amountTokenIn);
         }
         if (msg.value > 0) {
-            IWrappedNative(wrappedNativeToken).deposit{value: msg.value}();
+            IWrappedNative(WRAPPED_NATIVE_TOKEN).deposit{value: msg.value}();
         }
 
         (amountToken, amountNative, liquidity) = _zapNativePair(
@@ -125,8 +125,8 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         override
         returns (ZapQuote memory quote)
     {
-        _validatePair(tokenA, tokenB);
-        if (amountAIn == 0 && amountBIn == 0) revert ZeroAmount();
+        _checkPair(tokenA, tokenB);
+        if (amountAIn == 0 && amountBIn == 0) revert ZeroInputAmounts();
         return _quoteZapPair(tokenA, tokenB, amountAIn, amountBIn);
     }
 
@@ -137,8 +137,8 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         returns (ZapNativeQuote memory quote)
     {
         if (tokenAddress == address(0)) revert ZeroToken();
-        if (tokenAddress == wrappedNativeToken) revert WrappedNativeTokenNotAccepted();
-        if (amountTokenIn == 0 && amountNativeIn == 0) revert ZeroAmount();
+        if (tokenAddress == WRAPPED_NATIVE_TOKEN) revert WrappedNativeTokenNotAccepted();
+        if (amountTokenIn == 0 && amountNativeIn == 0) revert ZeroInputAmounts();
         return _quoteZapNativePair(tokenAddress, amountTokenIn, amountNativeIn);
     }
 
@@ -163,7 +163,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         _approveToken(params.tokenA, params.amountAIn);
         _approveToken(params.tokenB, params.amountBIn);
 
-        (amountA, amountB, liquidity) = router.addLiquidity(
+        (amountA, amountB, liquidity) = ROUTER.addLiquidity(
             params.tokenA,
             params.tokenB,
             params.amountAIn,
@@ -192,7 +192,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
     ) internal returns (uint256 amountToken, uint256 amountNative, uint256 liquidity) {
         (amountNative, amountToken, liquidity) = _zapPair(
             ZapTokenParams({
-                tokenA: wrappedNativeToken,
+                tokenA: WRAPPED_NATIVE_TOKEN,
                 tokenB: tokenAddress,
                 amountAIn: amountNativeIn,
                 amountBIn: amountTokenIn,
@@ -279,7 +279,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         view
         returns (ZapNativeQuote memory quote)
     {
-        ZapQuote memory pairQuote = _quoteZapPair(wrappedNativeToken, tokenAddress, amountNativeIn, amountTokenIn);
+        ZapQuote memory pairQuote = _quoteZapPair(WRAPPED_NATIVE_TOKEN, tokenAddress, amountNativeIn, amountTokenIn);
         quote.hasLiquidity = pairQuote.hasLiquidity;
         quote.willSwap = pairQuote.willSwap;
         quote.swapTokenIn = pairQuote.swapTokenIn;
@@ -315,7 +315,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         path[1] = tokenOut;
 
         _approveToken(tokenIn, amountToSwap);
-        uint256[] memory amounts = router.swapExactTokensForTokens(amountToSwap, 1, path, address(this), deadline);
+        uint256[] memory amounts = ROUTER.swapExactTokensForTokens(amountToSwap, 1, path, address(this), deadline);
 
         amountInAfterSwap = amountIn - amountToSwap;
         amountOutAfterSwap = amountOutAlready + amounts[1];
@@ -391,7 +391,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
     {
         totalSupply = pair.totalSupply();
 
-        if (IUniswapV2Factory(factory).feeTo() == address(0)) {
+        if (IUniswapV2Factory(FACTORY).feeTo() == address(0)) {
             return totalSupply;
         }
 
@@ -414,7 +414,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         view
         returns (uint256 reserveA, uint256 reserveB, bool hasLiquidity, address pairAddress)
     {
-        pairAddress = IUniswapV2Factory(factory).getPair(tokenA, tokenB);
+        pairAddress = IUniswapV2Factory(FACTORY).getPair(tokenA, tokenB);
         if (pairAddress == address(0)) {
             // forge-lint: disable-next-line(boolean-cst)
             return (0, 0, false, pairAddress);
@@ -433,14 +433,14 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         hasLiquidity = true;
     }
 
-    function _validatePair(address tokenA, address tokenB) internal pure {
+    function _checkPair(address tokenA, address tokenB) internal pure {
         if (tokenA == address(0)) revert ZeroTokenA();
         if (tokenB == address(0)) revert ZeroTokenB();
         if (tokenA == tokenB) revert IdenticalTokens();
     }
 
     function _approveToken(address tokenAddress, uint256 amount) internal {
-        IERC20(tokenAddress).forceApprove(address(router), amount);
+        IERC20(tokenAddress).forceApprove(address(ROUTER), amount);
     }
 
     function _refundTokenExcess(address tokenAddress, address to, uint256 balanceBefore) internal {
@@ -451,10 +451,10 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
     }
 
     function _refundWrappedNativeExcessAsNative(address to, uint256 balanceBefore) internal {
-        uint256 balance = IERC20(wrappedNativeToken).balanceOf(address(this));
+        uint256 balance = IERC20(WRAPPED_NATIVE_TOKEN).balanceOf(address(this));
         if (balance > balanceBefore) {
             uint256 refund = balance - balanceBefore;
-            IWrappedNative(wrappedNativeToken).withdraw(refund);
+            IWrappedNative(WRAPPED_NATIVE_TOKEN).withdraw(refund);
             _transferNative(to, refund);
         }
     }
@@ -462,6 +462,6 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
     function _transferNative(address to, uint256 amount) internal {
         // forge-lint: disable-next-line(arbitrary-send-eth)
         (bool success,) = to.call{value: amount}("");
-        if (!success) revert NativeTransferFailed();
+        if (!success) revert NativeRefundFailed();
     }
 }

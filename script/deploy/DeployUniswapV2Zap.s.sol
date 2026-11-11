@@ -53,9 +53,9 @@ contract DeployUniswapV2Zap is Script {
 
     function _validateDeployment(UniswapV2ZapConfig memory config, UniswapV2Zap zap) internal view {
         require(address(zap).code.length != 0, "UniswapV2Zap deployment failed");
-        require(address(zap.router()) == config.router, "Router mismatch");
-        require(zap.factory() == config.factory, "Factory mismatch");
-        require(zap.wrappedNativeToken() == config.wrappedNativeToken, "Wrapped native mismatch");
+        require(address(zap.ROUTER()) == config.router, "Router mismatch");
+        require(zap.FACTORY() == config.factory, "Factory mismatch");
+        require(zap.WRAPPED_NATIVE_TOKEN() == config.wrappedNativeToken, "Wrapped native mismatch");
     }
 
     function _logDeploymentSummary(address zap) internal pure {

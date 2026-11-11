@@ -13,7 +13,7 @@ contract BatchTransfer is IBatchTransfer {
         override
         returns (uint256 totalAmount)
     {
-        totalAmount = _validateTransferBatch(recipients, amounts);
+        totalAmount = _checkTransferBatch(recipients, amounts);
         if (msg.value != totalAmount) {
             revert NativeValueMismatch(totalAmount, msg.value);
         }
@@ -42,8 +42,8 @@ contract BatchTransfer is IBatchTransfer {
         override
         returns (uint256 totalAmount)
     {
-        _requireTokenContract(tokenAddress);
-        totalAmount = _validateTransferBatch(recipients, amounts);
+        _checkTokenContract(tokenAddress);
+        totalAmount = _checkTransferBatch(recipients, amounts);
 
         uint256 senderBalance = _erc20BalanceOf(tokenAddress, msg.sender);
         if (senderBalance < totalAmount) {
@@ -81,7 +81,7 @@ contract BatchTransfer is IBatchTransfer {
         override
         returns (uint256[] memory balances)
     {
-        _requireTokenContract(tokenAddress);
+        _checkTokenContract(tokenAddress);
 
         balances = new uint256[](accounts.length);
         for (uint256 i = 0; i < accounts.length; i++) {
@@ -89,7 +89,7 @@ contract BatchTransfer is IBatchTransfer {
         }
     }
 
-    function _validateTransferBatch(address[] calldata recipients, uint256[] calldata amounts)
+    function _checkTransferBatch(address[] calldata recipients, uint256[] calldata amounts)
         internal
         pure
         returns (uint256 totalAmount)
@@ -115,7 +115,7 @@ contract BatchTransfer is IBatchTransfer {
         }
     }
 
-    function _requireTokenContract(address tokenAddress) internal view {
+    function _checkTokenContract(address tokenAddress) internal view {
         if (tokenAddress == address(0) || tokenAddress.code.length == 0) {
             revert TokenNotContract(tokenAddress);
         }

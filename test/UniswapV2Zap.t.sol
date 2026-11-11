@@ -70,9 +70,9 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
     // ----------------------------------------------------------------------------------------
 
     function testConstructorBindsRouterFactoryAndWrappedNative() public view {
-        assertEq(address(zap.router()), address(router));
-        assertEq(zap.factory(), address(factory));
-        assertEq(zap.wrappedNativeToken(), address(weth));
+        assertEq(address(zap.ROUTER()), address(router));
+        assertEq(zap.FACTORY(), address(factory));
+        assertEq(zap.WRAPPED_NATIVE_TOKEN(), address(weth));
     }
 
     function testConstructorRevertsForZeroRouter() public {
@@ -98,8 +98,8 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         MockUniswapV2Router02 otherRouter = new MockUniswapV2Router02(address(0xFACADE), address(0xBEEF));
         UniswapV2Zap otherZap = new UniswapV2Zap(address(otherRouter));
 
-        assertEq(otherZap.factory(), address(0xFACADE));
-        assertEq(otherZap.wrappedNativeToken(), address(0xBEEF));
+        assertEq(otherZap.FACTORY(), address(0xFACADE));
+        assertEq(otherZap.WRAPPED_NATIVE_TOKEN(), address(0xBEEF));
     }
 
     // ----------------------------------------------------------------------------------------
@@ -151,7 +151,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         params.to = recipient;
         params.amountAIn = 0;
         params.amountBIn = 0;
-        vm.expectRevert(IUniswapV2ZapErrors.ZeroAmount.selector);
+        vm.expectRevert(IUniswapV2ZapErrors.ZeroInputAmounts.selector);
         zap.zapToken(params);
     }
 
@@ -165,7 +165,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         vm.expectRevert(IUniswapV2ZapErrors.ZeroRecipientAddress.selector);
         zap.zapNativeToken{value: 1}(address(tokenA), 0, 1, 1, 1, address(0), block.timestamp + 1);
 
-        vm.expectRevert(IUniswapV2ZapErrors.ZeroAmount.selector);
+        vm.expectRevert(IUniswapV2ZapErrors.ZeroInputAmounts.selector);
         zap.zapNativeToken(address(tokenA), 0, 1, 1, 1, recipient, block.timestamp + 1);
     }
 
@@ -179,7 +179,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         vm.expectRevert(IUniswapV2ZapErrors.IdenticalTokens.selector);
         zap.quoteZapToken(address(tokenA), address(tokenA), 1, 0);
 
-        vm.expectRevert(IUniswapV2ZapErrors.ZeroAmount.selector);
+        vm.expectRevert(IUniswapV2ZapErrors.ZeroInputAmounts.selector);
         zap.quoteZapToken(address(tokenA), address(tokenB), 0, 0);
 
         vm.expectRevert(IUniswapV2ZapErrors.ZeroToken.selector);
@@ -188,7 +188,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         vm.expectRevert(IUniswapV2ZapErrors.WrappedNativeTokenNotAccepted.selector);
         zap.quoteZapNativeToken(address(weth), 1, 0);
 
-        vm.expectRevert(IUniswapV2ZapErrors.ZeroAmount.selector);
+        vm.expectRevert(IUniswapV2ZapErrors.ZeroInputAmounts.selector);
         zap.quoteZapNativeToken(address(tokenA), 0, 0);
     }
 
@@ -1012,7 +1012,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
     function testZapNativeTokenRevertsWhenNativeRefundFails() public {
         RejectNativeZapCaller caller = new RejectNativeZapCaller(zap);
 
-        vm.expectRevert(IUniswapV2ZapErrors.NativeTransferFailed.selector);
+        vm.expectRevert(IUniswapV2ZapErrors.NativeRefundFailed.selector);
         caller.zapNativeToken{value: 10 ether}(address(tokenA), recipient, block.timestamp + 1);
     }
 

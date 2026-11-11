@@ -363,9 +363,12 @@ def fake_tool(tool: str, args: list) -> int:
             elif signature == "NATIVE_TRANSFER_GAS_LIMIT()(uint256)":
                 print(os.environ.get("BAD_GAS_LIMIT", data["gas_limit"]))
             elif signature in {
-                "router()(address)",
+                "ROUTER()(address)",
+                "FACTORY()(address)",
+                "WRAPPED_NATIVE_TOKEN()(address)",
+                # The Router keeps Uniswap's own method names; only the zap's getters are frozen-value
+                # constants, so `factory()` here is the Router call and `FACTORY()` the zap getter.
                 "factory()(address)",
-                "wrappedNativeToken()(address)",
                 "WETH()(address)",
             }:
                 print(data["calls"][signature])
@@ -707,9 +710,10 @@ def zap_behavioural_checks() -> int:
             "chain_id": "31337",
             "address": deployed,
             "calls": {
-                "router()(address)": router,
+                "ROUTER()(address)": router,
+                "FACTORY()(address)": factory,
+                "WRAPPED_NATIVE_TOKEN()(address)": weth,
                 "factory()(address)": factory,
-                "wrappedNativeToken()(address)": weth,
                 "WETH()(address)": weth,
             },
         }))
@@ -777,18 +781,24 @@ def zap_behavioural_checks() -> int:
         output = result.stdout + result.stderr
         assert "UniswapV2Zap verified" in output, output
         called = {call[3] for call in log if call[:2] == ["cast", "call"]}
-        assert {"router()(address)", "factory()(address)", "wrappedNativeToken()(address)", "WETH()(address)"} <= called, called
+        assert {
+            "ROUTER()(address)",
+            "FACTORY()(address)",
+            "WRAPPED_NATIVE_TOKEN()(address)",
+            "factory()(address)",
+            "WETH()(address)",
+        } <= called, called
 
         # 4. Each on-chain mismatch fails on its own.
         result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_OVERRIDES=json.dumps({"router()(address)": "0x" + "11" * 20}))
-        assert "router()" in result.stdout + result.stderr, result.stdout + result.stderr
+                        MOCK_CALL_OVERRIDES=json.dumps({"ROUTER()(address)": "0x" + "11" * 20}))
+        assert "ROUTER()" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_OVERRIDES=json.dumps({"factory()(address)": "0x" + "22" * 20}))
-        assert "factory()" in result.stdout + result.stderr, result.stdout + result.stderr
+                        MOCK_CALL_OVERRIDES=json.dumps({"FACTORY()(address)": "0x" + "22" * 20}))
+        assert "FACTORY()" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_OVERRIDES=json.dumps({"wrappedNativeToken()(address)": "0x" + "33" * 20}))
-        assert "wrappedNativeToken()" in result.stdout + result.stderr, result.stdout + result.stderr
+                        MOCK_CALL_OVERRIDES=json.dumps({"WRAPPED_NATIVE_TOKEN()(address)": "0x" + "33" * 20}))
+        assert "WRAPPED_NATIVE_TOKEN()" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("22_check_uniswap_v2_zap.sh", False, RPC_CODE_ERROR="1")
         assert "not deployed" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("22_check_uniswap_v2_zap.sh", False, RPC_CHAIN="56")

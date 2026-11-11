@@ -122,24 +122,24 @@ fi
 # The Router the zap binds is the one dex recorded: if dex was redeployed and the address file was
 # copied without redeploying the zap, this is where it shows up.
 if [ "$FAILED" -eq 0 ]; then
-    ACTUAL_ROUTER=$(cast call "$UNISWAP_V2_ZAP_ADDRESS" "router()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "router()" "$ROUTER_ADDRESS" "$ACTUAL_ROUTER" || FAILED=$((FAILED + 1))
+    ACTUAL_ROUTER=$(cast call "$UNISWAP_V2_ZAP_ADDRESS" "ROUTER()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
+    verify_value "ROUTER()" "$ROUTER_ADDRESS" "$ACTUAL_ROUTER" || FAILED=$((FAILED + 1))
 fi
 
 # factory() and wrappedNativeToken() are cached at construction time; re-derive both from the Router
 # on chain instead of comparing them with the same copied file, so a stale Router record or a zap
 # deployed against a different Router both fail here.
 if [ "$FAILED" -eq 0 ]; then
-    ACTUAL_FACTORY=$(cast call "$UNISWAP_V2_ZAP_ADDRESS" "factory()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
+    ACTUAL_FACTORY=$(cast call "$UNISWAP_V2_ZAP_ADDRESS" "FACTORY()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
     ROUTER_FACTORY=$(cast call "$ROUTER_ADDRESS" "factory()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "factory()" "$ROUTER_FACTORY" "$ACTUAL_FACTORY" || FAILED=$((FAILED + 1))
+    verify_value "FACTORY()" "$ROUTER_FACTORY" "$ACTUAL_FACTORY" || FAILED=$((FAILED + 1))
     verify_value "factory() matches the copied dependency record" "$FACTORY_ADDRESS" "$ACTUAL_FACTORY" || FAILED=$((FAILED + 1))
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-    ACTUAL_WETH=$(cast call "$UNISWAP_V2_ZAP_ADDRESS" "wrappedNativeToken()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
+    ACTUAL_WETH=$(cast call "$UNISWAP_V2_ZAP_ADDRESS" "WRAPPED_NATIVE_TOKEN()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
     ROUTER_WETH=$(cast call "$ROUTER_ADDRESS" "WETH()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "wrappedNativeToken()" "$ROUTER_WETH" "$ACTUAL_WETH" || FAILED=$((FAILED + 1))
+    verify_value "WRAPPED_NATIVE_TOKEN()" "$ROUTER_WETH" "$ACTUAL_WETH" || FAILED=$((FAILED + 1))
 fi
 
 if [ "$FAILED" -ne 0 ]; then
