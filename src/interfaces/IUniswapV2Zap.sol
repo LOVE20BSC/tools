@@ -72,13 +72,20 @@ interface IUniswapV2ZapErrors {
     error ZeroTokenB();
     error ZeroToken();
     error IdenticalTokens();
-    error WrappedNativeToken();
-    error ZeroTo();
+    error WrappedNativeTokenNotAccepted();
+    error ZeroRecipientAddress();
     error ZeroAmount();
     error PairMissingOrEmpty();
     error InsufficientLiquidity();
     error InvalidRatio();
-    error InsufficientLiquidityMinted();
+    error InsufficientInitialLiquidity();
+    error SwapOutputZero();
+    error OptimalAmountZero();
+    error LiquidityMintedZero();
+    error SlippageExceeded(
+        uint256 actual,
+        uint256 minAmount
+    );
     error AmountTooLarge();
     error NativeTransferFailed();
 }

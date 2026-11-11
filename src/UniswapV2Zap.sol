@@ -48,7 +48,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         returns (uint256 amountA, uint256 amountB, uint256 liquidity)
     {
         _validatePair(params.tokenA, params.tokenB);
-        if (params.to == address(0)) revert ZeroTo();
+        if (params.to == address(0)) revert ZeroRecipientAddress();
         if (params.amountAIn == 0 && params.amountBIn == 0) revert ZeroAmount();
 
         uint256 balanceABefore = IERC20(params.tokenA).balanceOf(address(this));
@@ -88,8 +88,8 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         uint256 deadline
     ) external payable override nonReentrant returns (uint256 amountToken, uint256 amountNative, uint256 liquidity) {
         if (tokenAddress == address(0)) revert ZeroToken();
-        if (tokenAddress == wrappedNativeToken) revert WrappedNativeToken();
-        if (to == address(0)) revert ZeroTo();
+        if (tokenAddress == wrappedNativeToken) revert WrappedNativeTokenNotAccepted();
+        if (to == address(0)) revert ZeroRecipientAddress();
         if (msg.value == 0 && amountTokenIn == 0) revert ZeroAmount();
 
         uint256 tokenBalanceBefore = IERC20(tokenAddress).balanceOf(address(this));
@@ -137,7 +137,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         returns (ZapNativeQuote memory quote)
     {
         if (tokenAddress == address(0)) revert ZeroToken();
-        if (tokenAddress == wrappedNativeToken) revert WrappedNativeToken();
+        if (tokenAddress == wrappedNativeToken) revert WrappedNativeTokenNotAccepted();
         if (amountTokenIn == 0 && amountNativeIn == 0) revert ZeroAmount();
         return _quoteZapNativePair(tokenAddress, amountTokenIn, amountNativeIn);
     }
@@ -174,7 +174,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
             params.deadline
         );
 
-        if (liquidity < params.liquidityMin) revert InsufficientLiquidityMinted();
+        if (liquidity < params.liquidityMin) revert SlippageExceeded(liquidity, params.liquidityMin);
 
         _approveToken(params.tokenA, 0);
         _approveToken(params.tokenB, 0);
@@ -217,7 +217,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         if (!hasLiquidity) {
             if (amountAIn == 0 || amountBIn == 0) revert PairMissingOrEmpty();
             if (amountAIn * amountBIn < (UNISWAP_V2_MINIMUM_LIQUIDITY + 1) * (UNISWAP_V2_MINIMUM_LIQUIDITY + 1)) {
-                revert InsufficientLiquidityMinted();
+                revert InsufficientInitialLiquidity();
             }
             quote.amountAUsed = amountAIn;
             quote.amountBUsed = amountBIn;
@@ -239,7 +239,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
                 quote.swapTokenIn = tokenA;
                 quote.swapTokenOut = tokenB;
                 quote.amountOutFromSwap = _getAmountOut(quote.amountToSwap, reserveA, reserveB);
-                if (quote.amountOutFromSwap == 0) revert InsufficientLiquidityMinted();
+                if (quote.amountOutFromSwap == 0) revert SwapOutputZero();
                 amountAAfterSwap = amountAIn - quote.amountToSwap;
                 amountBAfterSwap = amountBIn + quote.amountOutFromSwap;
                 reserveAAfterSwap = reserveA + quote.amountToSwap;
@@ -252,7 +252,7 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
                 quote.swapTokenIn = tokenB;
                 quote.swapTokenOut = tokenA;
                 quote.amountOutFromSwap = _getAmountOut(quote.amountToSwap, reserveB, reserveA);
-                if (quote.amountOutFromSwap == 0) revert InsufficientLiquidityMinted();
+                if (quote.amountOutFromSwap == 0) revert SwapOutputZero();
                 amountBAfterSwap = amountBIn - quote.amountToSwap;
                 amountAAfterSwap = amountAIn + quote.amountOutFromSwap;
                 reserveBAfterSwap = reserveB + quote.amountToSwap;
@@ -262,13 +262,13 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
 
         (quote.amountAUsed, quote.amountBUsed) =
             _quoteLiquidityAmounts(reserveAAfterSwap, reserveBAfterSwap, amountAAfterSwap, amountBAfterSwap);
-        if (quote.amountAUsed == 0 || quote.amountBUsed == 0) revert InsufficientLiquidityMinted();
+        if (quote.amountAUsed == 0 || quote.amountBUsed == 0) revert OptimalAmountZero();
         uint256 totalSupply =
             _quoteTotalSupplyAfterFeeMint(IUniswapV2Pair(pairAddress), reserveAAfterSwap, reserveBAfterSwap);
         quote.liquidity = _quoteLiquidityMinted(
             reserveAAfterSwap, reserveBAfterSwap, totalSupply, quote.amountAUsed, quote.amountBUsed
         );
-        if (quote.liquidity == 0) revert InsufficientLiquidityMinted();
+        if (quote.liquidity == 0) revert LiquidityMintedZero();
         quote.reserveAAfter = reserveAAfterSwap + quote.amountAUsed;
         quote.reserveBAfter = reserveBAfterSwap + quote.amountBUsed;
     }
