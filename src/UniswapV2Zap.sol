@@ -211,7 +211,8 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         returns (ZapQuote memory quote)
     {
         (uint256 reserveA, uint256 reserveB, bool hasLiquidity, address pairAddress) = _reserves(tokenA, tokenB);
-        if (amountAIn > UNISWAP_V2_MAX_RESERVE || amountBIn > UNISWAP_V2_MAX_RESERVE) revert AmountTooLarge();
+        if (amountAIn > UNISWAP_V2_MAX_RESERVE) revert AmountExceeded(amountAIn, UNISWAP_V2_MAX_RESERVE);
+        if (amountBIn > UNISWAP_V2_MAX_RESERVE) revert AmountExceeded(amountBIn, UNISWAP_V2_MAX_RESERVE);
         quote.hasLiquidity = hasLiquidity;
 
         if (!hasLiquidity) {
@@ -326,8 +327,16 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         returns (uint256 amountToSwap)
     {
         if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
-        if (amountIn > UNISWAP_V2_MAX_RESERVE || amountOutAlready > UNISWAP_V2_MAX_RESERVE) revert AmountTooLarge();
-        if (amountIn * reserveOut < reserveIn * amountOutAlready) revert InvalidRatio();
+        if (amountIn > UNISWAP_V2_MAX_RESERVE) revert AmountExceeded(amountIn, UNISWAP_V2_MAX_RESERVE);
+        if (amountOutAlready > UNISWAP_V2_MAX_RESERVE) {
+            revert AmountExceeded(amountOutAlready, UNISWAP_V2_MAX_RESERVE);
+        }
+        // No guard for `amountIn * reserveOut < reserveIn * amountOutAlready`: every caller picks the
+        // swap direction with exactly that comparison before entering here, so the subtraction below
+        // cannot underflow. `_quoteZapPair` calls this only from its
+        // `amountAIn * reserveB >= reserveA * amountBIn` branch (swapping the operands in the else
+        // branch), and `_swapExcess` is reached from the same comparison in `_zapPair`. Were the
+        // invariant ever violated, the subtraction panics instead of returning a bogus quote.
         uint256 imbalance = amountIn * reserveOut - reserveIn * amountOutAlready;
         return (
             Math.sqrt(

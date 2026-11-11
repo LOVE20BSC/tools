@@ -77,7 +77,6 @@ interface IUniswapV2ZapErrors {
     error ZeroAmount();
     error PairMissingOrEmpty();
     error InsufficientLiquidity();
-    error InvalidRatio();
     error InsufficientInitialLiquidity();
     error SwapOutputZero();
     error OptimalAmountZero();
@@ -86,7 +85,10 @@ interface IUniswapV2ZapErrors {
         uint256 actual,
         uint256 minAmount
     );
-    error AmountTooLarge();
+    error AmountExceeded(
+        uint256 amount,
+        uint256 maxAmount
+    );
     error NativeTransferFailed();
 }
 
