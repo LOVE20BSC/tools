@@ -2,12 +2,7 @@
 pragma solidity =0.8.37;
 
 import {IBatchTransfer} from "./interfaces/IBatchTransfer.sol";
-
-interface IERC20Minimal {
-    function balanceOf(address account) external view returns (uint256);
-    function allowance(address owner, address spender) external view returns (uint256);
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-}
+import {IERC20Minimal} from "./interfaces/IERC20Minimal.sol";
 
 contract BatchTransfer is IBatchTransfer {
     uint256 public constant override NATIVE_TRANSFER_GAS_LIMIT = 50_000;
@@ -29,38 +24,48 @@ contract BatchTransfer is IBatchTransfer {
                 // forge-lint: disable-next-line(arbitrary-send-eth, return-bomb)
                 recipients[i].call{value: amounts[i], gas: NATIVE_TRANSFER_GAS_LIMIT}("");
             if (!success) {
+                (bytes32 errorHash, uint256 errorLength) = _errorFingerprint(data);
                 // forge-lint: disable-next-line(require-revert-in-loop)
-                revert NativeTransferFailed(i, recipients[i], amounts[i], data);
+                revert NativeTransferFailed(i, recipients[i], amounts[i], errorHash, errorLength);
             }
         }
 
-        emit NativeBatchTransfer(msg.sender, totalAmount, recipientCount);
+        emit NativeBatchTransferred({
+            sender: msg.sender,
+            totalAmount: totalAmount,
+            recipientCount: recipientCount
+        });
     }
 
-    function batchTransferERC20(address token, address[] calldata recipients, uint256[] calldata amounts)
+    function batchTransferERC20(address tokenAddress, address[] calldata recipients, uint256[] calldata amounts)
         external
         override
         returns (uint256 totalAmount)
     {
-        _requireTokenContract(token);
+        _requireTokenContract(tokenAddress);
         totalAmount = _validateTransferBatch(recipients, amounts);
 
-        uint256 senderBalance = _erc20BalanceOf(token, msg.sender);
+        uint256 senderBalance = _erc20BalanceOf(tokenAddress, msg.sender);
         if (senderBalance < totalAmount) {
-            revert ERC20InsufficientBalance(token, msg.sender, senderBalance, totalAmount);
+            revert ERC20InsufficientBalance(tokenAddress, msg.sender, senderBalance, totalAmount);
         }
 
-        uint256 senderAllowance = _erc20Allowance(token, msg.sender, address(this));
+        uint256 senderAllowance = _erc20Allowance(tokenAddress, msg.sender, address(this));
         if (senderAllowance < totalAmount) {
-            revert ERC20InsufficientAllowance(token, msg.sender, address(this), senderAllowance, totalAmount);
+            revert ERC20InsufficientAllowance(tokenAddress, msg.sender, address(this), senderAllowance, totalAmount);
         }
 
         uint256 recipientCount = recipients.length;
         for (uint256 i = 0; i < recipientCount; i++) {
-            _safeTransferFrom(token, msg.sender, recipients[i], amounts[i], i);
+            _safeTransferFrom(tokenAddress, msg.sender, recipients[i], amounts[i], i);
         }
 
-        emit ERC20BatchTransfer(token, msg.sender, totalAmount, recipientCount);
+        emit ERC20BatchTransferred({
+            tokenAddress: tokenAddress,
+            sender: msg.sender,
+            totalAmount: totalAmount,
+            recipientCount: recipientCount
+        });
     }
 
     function nativeBalances(address[] calldata accounts) external view override returns (uint256[] memory balances) {
@@ -70,17 +75,17 @@ contract BatchTransfer is IBatchTransfer {
         }
     }
 
-    function erc20Balances(address token, address[] calldata accounts)
+    function erc20Balances(address tokenAddress, address[] calldata accounts)
         external
         view
         override
         returns (uint256[] memory balances)
     {
-        _requireTokenContract(token);
+        _requireTokenContract(tokenAddress);
 
         balances = new uint256[](accounts.length);
         for (uint256 i = 0; i < accounts.length; i++) {
-            balances[i] = _erc20BalanceOf(token, accounts[i]);
+            balances[i] = _erc20BalanceOf(tokenAddress, accounts[i]);
         }
     }
 
@@ -110,48 +115,58 @@ contract BatchTransfer is IBatchTransfer {
         }
     }
 
-    function _requireTokenContract(address token) internal view {
-        if (token == address(0) || token.code.length == 0) {
-            revert InvalidToken(token);
+    function _requireTokenContract(address tokenAddress) internal view {
+        if (tokenAddress == address(0) || tokenAddress.code.length == 0) {
+            revert TokenNotContract(tokenAddress);
         }
     }
 
-    function _erc20BalanceOf(address token, address account) internal view returns (uint256 balance) {
+    function _erc20BalanceOf(address tokenAddress, address account) internal view returns (uint256 balance) {
         (bool success, bytes memory data) =
-            token.staticcall(abi.encodeWithSelector(IERC20Minimal.balanceOf.selector, account));
+            tokenAddress.staticcall(abi.encodeWithSelector(IERC20Minimal.balanceOf.selector, account));
         if (!success || data.length < 32) {
+            (bytes32 returnDataHash, uint256 returnDataLength) = _errorFingerprint(data);
             // forge-lint: disable-next-line(require-revert-in-loop)
-            revert ERC20BalanceQueryFailed(token, account, data);
+            revert ERC20BalanceQueryFailed(tokenAddress, account, returnDataHash, returnDataLength);
         }
 
         balance = abi.decode(data, (uint256));
     }
 
-    function _erc20Allowance(address token, address owner, address spender)
+    function _erc20Allowance(address tokenAddress, address owner, address spender)
         internal
         view
         returns (uint256 allowanceAmount)
     {
         (bool success, bytes memory data) =
-            token.staticcall(abi.encodeWithSelector(IERC20Minimal.allowance.selector, owner, spender));
+            tokenAddress.staticcall(abi.encodeWithSelector(IERC20Minimal.allowance.selector, owner, spender));
         if (!success || data.length < 32) {
-            revert ERC20AllowanceQueryFailed(token, owner, spender, data);
+            (bytes32 returnDataHash, uint256 returnDataLength) = _errorFingerprint(data);
+            revert ERC20AllowanceQueryFailed(tokenAddress, owner, spender, returnDataHash, returnDataLength);
         }
 
         allowanceAmount = abi.decode(data, (uint256));
     }
 
-    function _safeTransferFrom(address token, address from, address to, uint256 amount, uint256 index) internal {
+    function _safeTransferFrom(address tokenAddress, address from, address to, uint256 amount, uint256 index)
+        internal
+    {
         (bool success, bytes memory data) =
-            token.call(abi.encodeWithSelector(IERC20Minimal.transferFrom.selector, from, to, amount));
+            tokenAddress.call(abi.encodeWithSelector(IERC20Minimal.transferFrom.selector, from, to, amount));
         if (!success) {
+            (bytes32 errorHash, uint256 errorLength) = _errorFingerprint(data);
             // forge-lint: disable-next-line(require-revert-in-loop)
-            revert ERC20TransferFailed(token, index, to, amount, data);
+            revert ERC20TransferFailed(tokenAddress, index, to, amount, errorHash, errorLength);
         }
         if (!_isSuccessfulERC20Return(data)) {
+            (bytes32 returnDataHash, uint256 returnDataLength) = _errorFingerprint(data);
             // forge-lint: disable-next-line(require-revert-in-loop)
-            revert ERC20InvalidReturn(token, index, to, amount, data);
+            revert ERC20InvalidReturn(tokenAddress, index, to, amount, returnDataHash, returnDataLength);
         }
+    }
+
+    function _errorFingerprint(bytes memory data) internal pure returns (bytes32 errorHash, uint256 errorLength) {
+        return (keccak256(data), data.length);
     }
 
     function _isSuccessfulERC20Return(bytes memory data) internal pure returns (bool) {

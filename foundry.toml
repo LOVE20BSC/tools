@@ -22,11 +22,33 @@ fail_on_revert = false
 [lint]
 severity = ["high", "med", "low"]
 ignore = ["test/**/*.sol"]
-# missing-zero-check: 构造函数的静态零值校验由部署脚本负责（dev-standards §5.7）；
-# 具体构造函数用行内抑制，不整类禁用。
+# missing-zero-check: 本合约没有构造函数（nor init），因此不存在需要在构造函数里做静态零值校验的行；
+# 部署期的静态校验全在 DeployBatchTransfer.s.sol，按 dev-standards §5.7 / §6.3 归部署脚本。
+# 这一条不需要写进 exclude_lints：本合约根本没有会触发它的位置。
+#
+# exclude_lints 逐条按本合约的真实理由给出，不是从 action/ 照抄的治理合约语境：
+# - calls-loop: batchTransferNative 通过 recipients[i].call 逐个付款、_safeTransferFrom 逐个
+#   transferFrom、_erc20BalanceOf 逐个 balanceOf —— 对一批外部地址循环调用就是「批量工具」的
+#   定义行为，不是遗漏。这三处每次调用都必须拿到最新外部状态，无法合并成一次调用；未来若要从
+#   全局禁用收紧为行内抑制，方案见本文件末尾注释。
+# - reentrancy-events: 本合约无状态（无 storage、无 owner、不托管资产），事件之前没有任何写操作，
+#   重入无法伪造或重排本合约的可信状态；事件只由 msg.sender 与已验证入参构成，重入最多把这笔
+#   如实发生的事实重复记录一次，不影响链下对账。
+# - unused-return: 批量入口有意忽略部分 tuple 返回值（例如只判 call 的 success、余额查询只看
+#   data 长度），返回值的完整校验在同一函数内单独完成，不依赖这些被忽略的分量。
+#   注：本类当前对本合约的实际告警数为 0，保留它是为防止后续改动引入忽略返回值时静默通过。
+#
+# arbitrary-send-eth 与 return-bomb 不在全局列表里：它们在 src/BatchTransfer.sol 原生币转发的
+# 那一行用 `forge-lint: disable-next-line(...)` 精确抑制，其余位置仍需接受检查。
 exclude_lints = ["calls-loop", "reentrancy-events", "unused-return"]
-# Same policy as core:
-# - calls-loop: per-round settlement needs fresh external state (supply, votes, proposals)
-# - reentrancy-events: events after view calls are safe; no state changes possible
-# - unused-return: tuple elements intentionally ignored where the count is already known
-# These warning types cannot be suppressed with inline comments in this Foundry version.
+
+# 若要把 calls-loop 收紧为行内抑制（当前未执行，待评审决定）：
+# 1. 从 exclude_lints 里删掉 "calls-loop"（保留另外两项）；
+# 2. 在下列三处的语句前各加一行 `// forge-lint: disable-next-item(calls-loop)`：
+#    - batchTransferNative 里的 `(bool success, bytes memory data) =` 之前
+#      （注意：该行上方已有 arbitrary-send-eth / return-bomb 的 disable-next-line，两行可共存）；
+#    - _erc20BalanceOf 里的 `(bool success, bytes memory data) =` 之前；
+#    - _safeTransferFrom 里的 `(bool success, bytes memory data) =` 之前。
+# 3. 用 `forge lint` 验证零告警。实测（Foundry 1.8.1）此方案可行：calls-loop 必须用
+#    disable-next-item 挂在多行赋值语句（`= token.call(...)`）之前才生效，挂在被调用的那一行
+#    上方（disable-next-line 或 item）都不生效；这是该 lint 按 AST 节点定位抑制点导致的。

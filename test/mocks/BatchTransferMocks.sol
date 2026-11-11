@@ -74,7 +74,8 @@ contract BrokenQueryERC20 {
     enum QueryMode {
         Ok,
         Revert,
-        Short
+        Short,
+        Empty
     }
 
     QueryMode public balanceMode;
@@ -105,6 +106,11 @@ contract BrokenQueryERC20 {
     function _returnByMode(QueryMode mode, uint256 value) internal pure {
         if (mode == QueryMode.Revert) {
             revert("BROKEN_QUERY");
+        }
+        if (mode == QueryMode.Empty) {
+            assembly {
+                return(0x00, 0x00)
+            }
         }
         if (mode == QueryMode.Short) {
             assembly {

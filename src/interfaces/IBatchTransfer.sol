@@ -2,28 +2,81 @@
 pragma solidity =0.8.37;
 
 interface IBatchTransferEvents {
-    event NativeBatchTransfer(address indexed sender, uint256 totalAmount, uint256 recipientCount);
-    event ERC20BatchTransfer(
-        address indexed token, address indexed sender, uint256 totalAmount, uint256 recipientCount
+    event NativeBatchTransferred(
+        address indexed sender,
+        uint256 totalAmount,
+        uint256 recipientCount
+    );
+    event ERC20BatchTransferred(
+        address indexed tokenAddress,
+        address indexed sender,
+        uint256 totalAmount,
+        uint256 recipientCount
     );
 }
 
 interface IBatchTransferErrors {
     error EmptyBatch();
-    error ArrayLengthMismatch(uint256 recipientsLength, uint256 amountsLength);
+    error ArrayLengthMismatch(
+        uint256 recipientsLength,
+        uint256 amountsLength
+    );
     error ZeroRecipient(uint256 index);
     error ZeroAmount(uint256 index);
-    error NativeValueMismatch(uint256 expected, uint256 actual);
-    error NativeTransferFailed(uint256 index, address recipient, uint256 amount, bytes reason);
-    error InvalidToken(address token);
-    error ERC20BalanceQueryFailed(address token, address account, bytes data);
-    error ERC20AllowanceQueryFailed(address token, address owner, address spender, bytes data);
-    error ERC20InsufficientBalance(address token, address owner, uint256 balance, uint256 required);
-    error ERC20InsufficientAllowance(
-        address token, address owner, address spender, uint256 allowanceAmount, uint256 required
+    error NativeValueMismatch(
+        uint256 expected,
+        uint256 actual
     );
-    error ERC20TransferFailed(address token, uint256 index, address recipient, uint256 amount, bytes reason);
-    error ERC20InvalidReturn(address token, uint256 index, address recipient, uint256 amount, bytes returnData);
+    error NativeTransferFailed(
+        uint256 index,
+        address recipient,
+        uint256 amount,
+        bytes32 errorHash,
+        uint256 errorLength
+    );
+    error TokenNotContract(address tokenAddress);
+    error ERC20BalanceQueryFailed(
+        address tokenAddress,
+        address account,
+        bytes32 returnDataHash,
+        uint256 returnDataLength
+    );
+    error ERC20AllowanceQueryFailed(
+        address tokenAddress,
+        address owner,
+        address spender,
+        bytes32 returnDataHash,
+        uint256 returnDataLength
+    );
+    error ERC20InsufficientBalance(
+        address tokenAddress,
+        address owner,
+        uint256 balance,
+        uint256 required
+    );
+    error ERC20InsufficientAllowance(
+        address tokenAddress,
+        address owner,
+        address spender,
+        uint256 allowanceAmount,
+        uint256 required
+    );
+    error ERC20TransferFailed(
+        address tokenAddress,
+        uint256 index,
+        address recipient,
+        uint256 amount,
+        bytes32 errorHash,
+        uint256 errorLength
+    );
+    error ERC20InvalidReturn(
+        address tokenAddress,
+        uint256 index,
+        address recipient,
+        uint256 amount,
+        bytes32 returnDataHash,
+        uint256 returnDataLength
+    );
 }
 
 interface IBatchTransfer is IBatchTransferEvents, IBatchTransferErrors {
@@ -34,13 +87,13 @@ interface IBatchTransfer is IBatchTransferEvents, IBatchTransferErrors {
         payable
         returns (uint256 totalAmount);
 
-    function batchTransferERC20(address token, address[] calldata recipients, uint256[] calldata amounts)
+    function batchTransferERC20(address tokenAddress, address[] calldata recipients, uint256[] calldata amounts)
         external
         returns (uint256 totalAmount);
 
     function nativeBalances(address[] calldata accounts) external view returns (uint256[] memory balances);
 
-    function erc20Balances(address token, address[] calldata accounts)
+    function erc20Balances(address tokenAddress, address[] calldata accounts)
         external
         view
         returns (uint256[] memory balances);

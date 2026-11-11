@@ -32,7 +32,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
 
         vm.deal(sender, 10 ether);
         vm.expectEmit(true, false, false, true, address(batchTransfer));
-        emit NativeBatchTransfer({
+        emit NativeBatchTransferred({
             sender: sender,
             totalAmount: 6 ether,
             recipientCount: 3
@@ -80,7 +80,8 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 1,
                 address(rejectNative),
                 1 ether,
-                _errorString("REJECT_NATIVE")
+                keccak256(_errorString("REJECT_NATIVE")),
+                _errorString("REJECT_NATIVE").length
             )
         );
         batchTransfer.batchTransferNative{value: 2 ether}(recipients, amounts);
@@ -99,8 +100,8 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         token.approve(address(batchTransfer), 600);
 
         vm.expectEmit(true, true, false, true, address(batchTransfer));
-        emit ERC20BatchTransfer({
-            token: address(token),
+        emit ERC20BatchTransferred({
+            tokenAddress: address(token),
             sender: sender,
             totalAmount: 600,
             recipientCount: 3
@@ -197,7 +198,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         vm.prank(sender);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IBatchTransferErrors.ERC20InvalidReturn.selector, address(token), 0, recipient1, 100, abi.encode(false)
+                IBatchTransferErrors.ERC20InvalidReturn.selector, address(token), 0, recipient1, 100, keccak256(abi.encode(false)), 32
             )
         );
         batchTransfer.batchTransferERC20(address(token), recipients, amounts);
@@ -225,7 +226,8 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 1,
                 recipient2,
                 200,
-                _errorString("MOCK_RECIPIENT")
+                keccak256(_errorString("MOCK_RECIPIENT")),
+                _errorString("MOCK_RECIPIENT").length
             )
         );
         batchTransfer.batchTransferERC20(address(token), recipients, amounts);
@@ -249,7 +251,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         vm.prank(sender);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IBatchTransferErrors.ERC20InvalidReturn.selector, address(shortReturnToken), 0, recipient1, 100, hex"01"
+                IBatchTransferErrors.ERC20InvalidReturn.selector, address(shortReturnToken), 0, recipient1, 100, keccak256(hex"01"), 1
             )
         );
         batchTransfer.batchTransferERC20(address(shortReturnToken), recipients, amounts);
@@ -272,7 +274,8 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 IBatchTransferErrors.ERC20BalanceQueryFailed.selector,
                 address(brokenToken),
                 sender,
-                _errorString("BROKEN_QUERY")
+                keccak256(_errorString("BROKEN_QUERY")),
+                _errorString("BROKEN_QUERY").length
             )
         );
         batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts);
@@ -292,7 +295,28 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 address(brokenToken),
                 sender,
                 address(batchTransfer),
-                _errorString("BROKEN_QUERY")
+                keccak256(_errorString("BROKEN_QUERY")),
+                _errorString("BROKEN_QUERY").length
+            )
+        );
+        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts);
+    }
+
+    function testRevertsOnEmptyBalanceQueryReturn() public {
+        BrokenQueryERC20 brokenToken = new BrokenQueryERC20();
+        address[] memory recipients = _recipients3();
+        uint256[] memory amounts = _amounts3(100, 200, 300);
+
+        brokenToken.setBalanceMode(BrokenQueryERC20.QueryMode.Empty);
+
+        vm.prank(sender);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IBatchTransferErrors.ERC20BalanceQueryFailed.selector,
+                address(brokenToken),
+                sender,
+                keccak256(bytes("")),
+                0
             )
         );
         batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts);
@@ -332,7 +356,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                IBatchTransferErrors.ERC20BalanceQueryFailed.selector, address(brokenToken), recipient1, hex"01"
+                IBatchTransferErrors.ERC20BalanceQueryFailed.selector, address(brokenToken), recipient1, keccak256(hex"01"), 1
             )
         );
         batchTransfer.erc20Balances(address(brokenToken), accounts);
@@ -420,14 +444,14 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         batchTransfer.batchTransferERC20(address(token), recipients, amounts);
     }
 
-    function testRevertsOnInvalidToken() public {
+    function testRevertsOnTokenNotContract() public {
         address[] memory recipients = _recipients3();
         uint256[] memory amounts = _amounts3(100, 200, 300);
 
-        vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.InvalidToken.selector, address(0)));
+        vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.TokenNotContract.selector, address(0)));
         batchTransfer.batchTransferERC20(address(0), recipients, amounts);
 
-        vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.InvalidToken.selector, recipient1));
+        vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.TokenNotContract.selector, recipient1));
         batchTransfer.erc20Balances(recipient1, recipients);
     }
 
