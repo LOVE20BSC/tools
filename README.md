@@ -21,7 +21,7 @@
 
 - 仓库骨架与工具链已建立，编译基线为 Solidity `0.8.37`、Foundry `1.8.1`、`evm_version = "osaka"`，不使用 `via_ir`。
 - `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，之后追加一个规范整改提交。27 个用例全通过（24 个合约用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,495 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
-- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**第一步（合约 + 接口 + 最小测试骨架）已完成**：`src/UniswapV2Zap.sol`、`src/interfaces/IUniswapV2Zap.sol` 与四个最小外部接口落地，`test/UniswapV2Zap.t.sol` 目前只有 6 个骨架用例（构造函数、`receive`、两条 happy path、`testNoAdminFunctions`），运行时字节码 9,453 字节。完整的迁移用例、部署脚本与地址参数文件属第二步。
+- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**两个步骤均已完成**：合约、接口与四个最小外部接口落地；`error` 按 `error-standards.md` 拆分为一条件一错误；mock 补齐到真实 constant-product 数学与协议费分支；移植 43 个源用例并补足新增错误的可达路径，共 61 个用例（含 2 个 fuzz）全通过；部署脚本、地址参数文件与部署回归测试落地。运行时字节码 9,469 字节（EIP-170 上限 24,576）。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
 
 ## 与旧仓的差异
 
@@ -128,10 +128,17 @@ python3 test/deploy_scripts_test.py
 部署（先起本地链并配好 `script/network/<network>/.account`）：
 
 ```sh
+# BatchTransfer
 ./script/deploy/one_click_deploy_batch_transfer.sh anvil31337_dev   # 一键：部署 → 校验 → 验证
 ./script/deploy/11_deploy_batch_transfer.sh anvil31337_dev          # 分步：仅部署
 ./script/deploy/21_check_batch_transfer.sh anvil31337_dev           # 分步：仅校验
 ./script/deploy/31_verify_batch_transfer.sh anvil31337_dev          # 分步：仅开源验证
+
+# UniswapV2Zap（先跑完 dex 的 WETH + UniswapV2，并复制它的 addresses.uniswapv2.params）
+./script/deploy/one_click_deploy_uniswap_v2_zap.sh anvil31337_dev
+./script/deploy/12_deploy_uniswap_v2_zap.sh anvil31337_dev
+./script/deploy/22_check_uniswap_v2_zap.sh anvil31337_dev
+./script/deploy/32_verify_uniswap_v2_zap.sh anvil31337_dev
 ```
 
 目录与新增网络的约定见 [`script/deploy/README.md`](script/deploy/README.md)。
@@ -169,3 +176,54 @@ python3 test/deploy_scripts_test.py
 因此本合约没有"跑路"路径可言：任何调用者能做的事，都只是把自己名下的资产按自己给的清单转出去。
 
 **地址文件**：部署后地址写入 `script/network/<network>/addresses.batch-transfer.params`，键名 `BATCH_TRANSFER_ADDRESS`。该文件由部署脚本写入，`21_check_batch_transfer.sh` 会断言键集合恰好等于期望合约集合。构造参数文件 `script/network/<network>/batch-transfer.params` 存在但只含注释——本合约无构造参数，保留该文件是为了让每个模块在 `script/network/<network>/` 下保持同一形状。
+
+### UniswapV2Zap
+
+**做什么**。一个无状态的 Uniswap V2 加池工具，四个入口：
+
+- `zapToken(ZapTokenParams params)` —— 把 `tokenA`/`tokenB` 两种代币加入它们的 V2 池并铸造 LP。单边输入时先把超出比例的那一侧换成另一侧，再把两侧一起加进池子；两边都给时按池子当前比例取用，多出来的原路退回。`ZapTokenParams` 里的 `amountAMin`/`amountBMin`/`liquidityMin` 是三条独立的滑点底线，`to` 是 LP 的接收方。
+- `zapNativeToken(address tokenAddress, uint256 amountTokenIn, uint256 amountTokenMin, uint256 amountNativeMin, uint256 liquidityMin, address to, uint256 deadline)` —— 同一件事，但一侧是原生币。`msg.value` 换成 wrapped native 后与 `tokenAddress` 组成池子；单边输入时同样先换再池。
+- `quoteZapToken(address tokenA, address tokenB, uint256 amountAIn, uint256 amountBIn)` —— 只读预测：返回将会被使用的两侧数量、内部兑换量、预计铸得的 LP，以及加池后的储备。预测与实际执行逐 wei 一致（有 fuzz 用例钉住）。
+- `quoteZapNativeToken(address tokenAddress, uint256 amountTokenIn, uint256 amountNativeIn)` —— 原生币版本的预测，字段名换成 `amountTokenUsed`/`amountNativeUsed`。
+
+兑换方向由池子当前的储备比决定：哪一侧给多了就换哪一侧。内部兑换量由一个闭式解算出（`_calcAmountToSwap`），不是迭代逼近，所以预测与执行不会因舍入而分叉。
+
+**构造函数参数**：一个地址 `router`，即 UniswapV2 Router02。`factory` 与 `wrappedNativeToken` **不在构造参数里**：合约在构造期从 Router 的 `factory()` 与 `WETH()` 反查并缓存为 immutable（`dev-standards` §5.4 —— 能由入参 getter 派生的依赖不再重复入参）。三方任一为零即回滚（`ZeroRouter`、`ZeroFactory`、`ZeroWrappedNativeToken`）。
+
+**承诺**：
+
+- **无 owner** —— 没有 owner、admin、operator 或任何特权地址。合约只有 immutable 的 `router`/`factory`/`wrappedNativeToken` 三个读接口，部署后不存在只有某个地址能调的入口；`testNoAdminFunctions` 逐个断言 `owner()`/`pause()`/`recover(address,uint256)`/`admin()` 都不存在。
+- **无升级** —— 不是代理，没有实现槽、没有 `upgradeTo`；部署即终态。
+- **会短暂持有用户资产** —— 这一点与 `BatchTransfer` 不同，必须说清楚。`zapToken` 把用户的两笔代币 `transferFrom` 到合约自身，在这里完成兑换与加池，然后把没用掉的部分退回；`zapNativeToken` 把 `msg.value` 包成 wrapped native 留在合约内做同样的处理，退回时解包成原生币发回。因此在**同一笔交易内**，合约地址会短暂持有用户的代币与 LP 授权。
+  - 这笔交易的原子性就是保障：任何一步回滚（滑点不达标、Router 报错、退款失败、`deadline` 过期）都会让整笔交易连同已转入的资产一起回滚，不存在"钱进了合约但交易失败"的状态。
+  - 退款按**差值**计算，不是按输入金额：`_refundTokenExcess` / `_refundWrappedNativeExcessAsNative` 在转入前先记下余额，只退"比转入前多出来的部分"。合约里如果本来就躺着别人的代币（误转、旧交易残留），不会被当成本次输入退给调用者，也不会被本次调用动用。`testZapTokenDoesNotRefundExistingBalances` 与 `testZapNativeTokenDoesNotRefundExistingBalances` 钉住这条。
+  - 授权只给 Router，且是**逐笔精确额度**（`forceApprove` 到本次要用的数），兑换与加池完成后立即归零。合约不保存任何跨交易的 `allowance`。
+  - `receive()` 只接受 wrapped native 合约本身（`NativeTokenNotAccepted`）——退款走"解包再转出"，原生币只能从 wrapped native 进来，没有任何第三方可以把原生币打进本合约。
+  - 合约**没有**"把余额转给某人"的入口。残留资产（例如有人直接 `transfer` 代币进来）没有提取路径，这正是"无管理员"的另一面；`zapToken` 的退款差值设计保证它不会把残留资产顺手转走。
+
+**与 LOVE20 协议的关系**：**Zap 不依赖任何 LOVE20 合约**。它只认识 `IUniswapV2Router02`/`IUniswapV2Factory`/`IUniswapV2Pair`/`IWrappedNative` 这四个外部调用面，是通用 DEX 工具。它在 `LOVE20TKM` 里之所以"服务于 LOVE20 代币"，只是因为部署时把 `router` 指向了同一个 Uniswap V2 Factory——同一条 Factory 上有 LOVE20 代币的池子，于是这个工具对它们可用。换成任意别的 V2 部署，同一个字节码一样工作。本仓 `src/interfaces/` 里的四个 Uniswap 接口也按这个定位声明：只写本合约实际编码的 selector，不复制上游完整接口。
+
+**地址文件**：部署后地址写入 `script/network/<network>/addresses.uniswap-v2-zap.params`，键名 `UNISWAP_V2_ZAP_ADDRESS`；`22_check_uniswap_v2_zap.sh` 会断言键集合恰好等于期望合约集合，并在回读时把 `router()` / `factory()` / `wrappedNativeToken()` 三个 getter 与预期逐项核对。
+
+Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，按 `dev-standards` §6.2 以"复制被依赖方的地址文件"的方式引入——`script/network/<network>/addresses.uniswapv2.params` 是从 `LOVE20BSC/dex` 同名文件**逐字节复制**过来的（键名 `FACTORY_ADDRESS` / `ROUTER_ADDRESS`，由 `dex` 生产，本仓不得改写）。`dex` 重新部署后重抄这一个文件即可同步，不需要手工转抄或在两个地方各记一份。模块参数文件 `script/network/<network>/uniswap-v2-zap.params` 因此只含注释。
+
+**与旧仓的 ABI 差异**（`LOVE20TKM/periphery/src/UniswapV2Zap.sol`）：
+
+| 旧 | 新 | 原因 |
+| --- | --- | --- |
+| `event ZapToken(address indexed account, ...)` | `event TokenZapped(address indexed sender, ...)` | 事件名改完成时态（`event-standards` §4.2）；`account` 改名 `sender`，与 `TokenZapped` 的字段表一致 |
+| `event ZapNativeToken(address indexed account, address indexed token, ...)` | `event NativeTokenZapped(address indexed sender, address indexed tokenAddress, ...)` | 同上；`token` → `tokenAddress` |
+| `error ZeroTo()` | `error ZeroRecipientAddress()` | 旧名不是 `Zero<Field>` 形态（`error-standards` §3 示例即写 `ZeroRecipientAddress()`） |
+| `error WrappedNativeToken()` | `error WrappedNativeTokenNotAccepted()` | 旧名是名词短语，不是失败状态 |
+| `error InsufficientLiquidityMinted()`（一处 selector 承载 5 类条件） | `SlippageExceeded(uint256 actual, uint256 minAmount)` / `InsufficientInitialLiquidity()` / `SwapOutputZero()` / `OptimalAmountZero()` / `LiquidityMintedZero()` | `error-standards` §2 一条件一错误；载荷按 §4，上限用 `actual + limit` |
+| `PairMissingOrEmpty` / `InsufficientLiquidity` / `InvalidRatio` / `AmountTooLarge` / `NativeTransferFailed` / `ZeroTokenA` / `ZeroTokenB` 等 | 同名保留 | 这些名字的载荷与句式仍有可议之处（见下节），但不在本次范围内，改动会破坏已冻结的 selector |
+
+旧仓的 43 个用例全部有对应用例（用例名按本仓风格重写，断言点逐项对应），并按拆分后的错误补了新增失败路径的用例；两个 fuzz 用例保留（`testFuzzQuoteZapTokenMatchesActualForRandomPools`、`testFuzzQuoteZapNativeTokenMatchesActual`）。
+
+**待决的规范整改**：以下五条是本次评估后**有意保留**的，需要单独决策再动，因为每一条都会改公开 selector：
+
+1. `ZeroTokenA()` / `ZeroTokenB()` —— 把参数位置编进了名字，不是 `Zero<Field>` 形态。建议合并为 `ZeroTokenAddress(uint256 index)`，或保持现状（两个错误各自只判一个位置，读起来更直接）。
+2. `AmountTooLarge()` —— 按 `error-standards` §3 上限语义应为 `<Subject>Exceeded` 且带 `actual/limit`。建议 `AmountExceeded(uint256 amount, uint256 maxAmount)`。
+3. `InsufficientLiquidity()` —— 缺口语义符合 `Insufficient*`，但无载荷；它与 `InsufficientInitialLiquidity()` 不重复（前者是池子储备为零、公式无解，后者是新池输入太小、铸不出 MINIMUM_LIQUIDITY），不需要合并，只需要补载荷。
+4. `InvalidRatio()` —— `Invalid*` 按 §3 应带 `value` 载荷；更要紧的是它**结构上不可达**：两处调用点都用与守卫相同的比较选好了兑换方向。按 `error-standards` §八「不保留不可达错误」，这里的处置应当是**删除**而不是补载荷，改为 `assert` 或直接依赖调用点的分支已保证。`testQuoteZapTokenNeverProducesInvalidRatio` 目前把它钉成不变式，删错误时一并删该用例。
+5. `NativeTransferFailed()` —— `*Failed` 句式符合 §3；载荷按 §4「没有行动价值时省略载荷」可以不加（失败方是 `to`，调用方自己知道），保持无载荷。
