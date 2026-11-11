@@ -37,6 +37,13 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
     uint256 internal constant NATIVE_SEED_LIQUIDITY = 100 ether;
     uint256 internal constant USER_NATIVE_BALANCE = 200 ether;
 
+    /// @dev `cast sig` of the no-argument ratio-mismatch error that `_calcAmountToSwap` used to
+    /// declare and guard on. The declaration is deleted (`error-standards` §8: no unreachable
+    /// errors), so the selector is frozen here as a literal: a test that asserted on the removed
+    /// declaration would not compile, and a test that dropped it entirely would lose the proof that
+    /// the deleted error really was unreachable. See the README's ABI-diff table for the derivation.
+    bytes4 internal constant RETIRED_RATIO_ERROR_SELECTOR = 0x648564d3;
+
     receive() external payable {}
 
     function setUp() public {
@@ -644,12 +651,31 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
     // Quote failures: one case per reachable error
     // ----------------------------------------------------------------------------------------
 
-    function testQuoteZapTokenRevertsWhenAmountTooLarge() public {
-        vm.expectRevert(IUniswapV2ZapErrors.AmountTooLarge.selector);
-        zap.quoteZapToken(address(tokenA), address(tokenB), uint256(type(uint112).max) + 1, 0);
+    function testQuoteZapTokenRevertsWhenAmountAExceeded() public {
+        uint256 maxAmount = uint256(type(uint112).max);
+        uint256 amount = maxAmount + 1;
 
-        vm.expectRevert(IUniswapV2ZapErrors.AmountTooLarge.selector);
-        zap.quoteZapToken(address(tokenA), address(tokenB), 0, uint256(type(uint112).max) + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(IUniswapV2ZapErrors.AmountExceeded.selector, amount, maxAmount)
+        );
+        zap.quoteZapToken(address(tokenA), address(tokenB), amount, 0);
+
+        // Validation order is tokenA then tokenB, so with both amounts over the limit the payload
+        // names tokenA's amount (both are reported through the same payload shape).
+        vm.expectRevert(
+            abi.encodeWithSelector(IUniswapV2ZapErrors.AmountExceeded.selector, amount, maxAmount)
+        );
+        zap.quoteZapToken(address(tokenA), address(tokenB), amount, amount + 1);
+    }
+
+    function testQuoteZapTokenRevertsWhenAmountBExceeded() public {
+        uint256 maxAmount = uint256(type(uint112).max);
+        uint256 amount = maxAmount + 1;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IUniswapV2ZapErrors.AmountExceeded.selector, amount, maxAmount)
+        );
+        zap.quoteZapToken(address(tokenA), address(tokenB), 0, amount);
     }
 
     function testQuoteZapTokenRevertsWhenNewPairInputCannotMintLiquidity() public {
@@ -719,33 +745,40 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         assertEq(zap.quoteZapToken(address(tokenI), address(tokenJ), 1_001, 1_001).liquidity, 1, "liquidity");
     }
 
-    /// @dev Load-bearing: `_calcAmountToSwap`'s `InvalidRatio()` guard is unreachable, because both
-    /// call sites pick the swap direction with the same comparison the guard re-checks. Pinned here
-    /// so a future change to that branch selection cannot silently make the guard fire (which would
-    /// mean the direction was chosen wrong) — see the report for the dead-declaration finding.
-    function testQuoteZapTokenNeverProducesInvalidRatio() public view {
+    /// @dev The ratio-mismatch error that `_calcAmountToSwap` used to raise is deleted: it was
+    /// unreachable, because both call sites pick the swap direction with the same comparison the
+    /// guard re-checked (`error-standards` §8: no unreachable errors). The selector is kept as a
+    /// literal so the probe does not depend on a declaration that no longer exists; it is the
+    /// `cast sig` of the deleted no-argument signature, recorded in the README's ABI-diff table.
+    function testQuoteZapTokenNeverRevertsWithTheRetiredRatioSelector() public view {
         uint256[7] memory amounts = [uint256(1), 1e3, 1e6, 1e12, 1e17, 1e21, 1e23];
         uint256 reverts;
 
         for (uint256 i = 0; i < amounts.length; i++) {
             for (uint256 j = 0; j < amounts.length; j++) {
-                reverts += _expectNoInvalidRatio(amounts[i], amounts[j]);
-                reverts += _expectNoInvalidRatio(amounts[i], 0);
-                reverts += _expectNoInvalidRatio(amounts[j], amounts[i]);
+                reverts += _expectNoRetiredRatioSelector(amounts[i], amounts[j]);
+                reverts += _expectNoRetiredRatioSelector(amounts[i], 0);
+                reverts += _expectNoRetiredRatioSelector(amounts[j], amounts[i]);
             }
         }
 
         assertGt(reverts, 0, "the probe must actually exercise failing quotes");
     }
 
-    function _expectNoInvalidRatio(uint256 amountAIn, uint256 amountBIn) internal view returns (uint256 reverted) {
+    function _expectNoRetiredRatioSelector(uint256 amountAIn, uint256 amountBIn)
+        internal
+        view
+        returns (uint256 reverted)
+    {
         try zap.quoteZapToken(address(tokenA), address(tokenB), amountAIn, amountBIn) returns (ZapQuote memory) {}
         catch (bytes memory reason) {
             bytes4 selector;
             assembly {
                 selector := mload(add(reason, 32))
             }
-            assertTrue(selector != IUniswapV2ZapErrors.InvalidRatio.selector, "InvalidRatio reached");
+            // No quote may ever raise it — that is what "the error was unreachable" means. A revert
+            // re-introduced under that selector, from any direction-selection regression, fails here.
+            assertTrue(selector != RETIRED_RATIO_ERROR_SELECTOR, "retired ratio error reached");
             reverted = 1;
         }
     }

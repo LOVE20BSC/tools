@@ -216,14 +216,16 @@ Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，�
 | `error ZeroTo()` | `error ZeroRecipientAddress()` | 旧名不是 `Zero<Field>` 形态（`error-standards` §3 示例即写 `ZeroRecipientAddress()`） |
 | `error WrappedNativeToken()` | `error WrappedNativeTokenNotAccepted()` | 旧名是名词短语，不是失败状态 |
 | `error InsufficientLiquidityMinted()`（一处 selector 承载 5 类条件） | `SlippageExceeded(uint256 actual, uint256 minAmount)` / `InsufficientInitialLiquidity()` / `SwapOutputZero()` / `OptimalAmountZero()` / `LiquidityMintedZero()` | `error-standards` §2 一条件一错误；载荷按 §4，上限用 `actual + limit` |
-| `PairMissingOrEmpty` / `InsufficientLiquidity` / `InvalidRatio` / `AmountTooLarge` / `NativeTransferFailed` / `ZeroTokenA` / `ZeroTokenB` 等 | 同名保留 | 这些名字的载荷与句式仍有可议之处（见下节），但不在本次范围内，改动会破坏已冻结的 selector |
+| `error AmountTooLarge()` | `error AmountExceeded(uint256 amount, uint256 maxAmount)` | `error-standards` §3 数值上限统一用 `<Subject>Exceeded`，§4 载荷为 `actual + limit`；两处 `\|\|` 合并的条件拆成逐个检查，因此负载能定位到超限的那一侧金额 |
+| `error InvalidRatio()` | **删除** | `error-standards` §八「不保留不可达错误」。两处调用点都用与守卫完全相同的比较选好了兑换方向（见下），守卫恒为假 |
+| `PairMissingOrEmpty` / `InsufficientLiquidity` / `NativeTransferFailed` / `ZeroTokenA` / `ZeroTokenB` 等 | 同名保留 | 这些名字的载荷与句式仍有可议之处（见下节），但不在本次范围内，改动会破坏已冻结的 selector |
+
+`InvalidRatio` 删除的依据：`_calcAmountToSwap` 的守卫是 `amountIn * reserveOut < reserveIn * amountOutAlready`，而 `_quoteZapPair` 只在 `amountAIn * reserveB >= reserveA * amountBIn` 分支里调用它（否则交换两个操作数再调用），`_swapExcess` 同样由该比较保护。因此进入函数时守卫必然为假，紧接的减法不可能下溢；代码里留了一行注释记录这个不变式。测试侧不再引用已删除的声明，而是把该签名的选择器冻结成字面量 `0x648564d3`（`cast sig "InvalidRatio()"`），用探测用例证明任何输入都不会以它 revert——这样既删了死声明，又保留了「它确实不可达」的证据。
 
 旧仓的 43 个用例全部有对应用例（用例名按本仓风格重写，断言点逐项对应），并按拆分后的错误补了新增失败路径的用例；两个 fuzz 用例保留（`testFuzzQuoteZapTokenMatchesActualForRandomPools`、`testFuzzQuoteZapNativeTokenMatchesActual`）。
 
-**待决的规范整改**：以下五条是本次评估后**有意保留**的，需要单独决策再动，因为每一条都会改公开 selector：
+**待决的规范整改**：以下三条是本次评估后**有意保留**的，需要单独决策再动，因为每一条都会改公开 selector：
 
 1. `ZeroTokenA()` / `ZeroTokenB()` —— 把参数位置编进了名字，不是 `Zero<Field>` 形态。建议合并为 `ZeroTokenAddress(uint256 index)`，或保持现状（两个错误各自只判一个位置，读起来更直接）。
-2. `AmountTooLarge()` —— 按 `error-standards` §3 上限语义应为 `<Subject>Exceeded` 且带 `actual/limit`。建议 `AmountExceeded(uint256 amount, uint256 maxAmount)`。
-3. `InsufficientLiquidity()` —— 缺口语义符合 `Insufficient*`，但无载荷；它与 `InsufficientInitialLiquidity()` 不重复（前者是池子储备为零、公式无解，后者是新池输入太小、铸不出 MINIMUM_LIQUIDITY），不需要合并，只需要补载荷。
-4. `InvalidRatio()` —— `Invalid*` 按 §3 应带 `value` 载荷；更要紧的是它**结构上不可达**：两处调用点都用与守卫相同的比较选好了兑换方向。按 `error-standards` §八「不保留不可达错误」，这里的处置应当是**删除**而不是补载荷，改为 `assert` 或直接依赖调用点的分支已保证。`testQuoteZapTokenNeverProducesInvalidRatio` 目前把它钉成不变式，删错误时一并删该用例。
-5. `NativeTransferFailed()` —— `*Failed` 句式符合 §3；载荷按 §4「没有行动价值时省略载荷」可以不加（失败方是 `to`，调用方自己知道），保持无载荷。
+2. `InsufficientLiquidity()` —— 缺口语义符合 `Insufficient*`，但无载荷；它与 `InsufficientInitialLiquidity()` 不重复（前者是池子储备为零、公式无解，后者是新池输入太小、铸不出 MINIMUM_LIQUIDITY）。该条件下没有任何可用数值（储备就是 0），按 §4「没有行动价值时省略载荷」保持无载荷成立。
+3. `NativeTransferFailed()` —— `*Failed` 句式符合 §3；载荷按 §4「没有行动价值时省略载荷」可以不加（失败方是 `to`，调用方自己知道），保持无载荷。
