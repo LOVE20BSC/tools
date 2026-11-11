@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity =0.8.17;
+pragma solidity =0.8.37;
 
 interface IBatchTransferEvents {
     event NativeBatchTransfer(address indexed sender, uint256 totalAmount, uint256 recipientCount);

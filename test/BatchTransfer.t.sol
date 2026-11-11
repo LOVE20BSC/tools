@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity =0.8.17;
+pragma solidity =0.8.37;
 
-import {Test} from "forge-std/Test.sol";
+import {Test} from "@forge-std/Test.sol";
 import {BatchTransfer} from "../src/BatchTransfer.sol";
-import {IBatchTransferErrors, IBatchTransferEvents} from "../src/interface/IBatchTransfer.sol";
+import {IBatchTransferErrors, IBatchTransferEvents} from "../src/interfaces/IBatchTransfer.sol";
 
 contract MockERC20 {
     string public constant name = "Mock Token";

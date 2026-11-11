@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-pragma solidity =0.8.17;
+pragma solidity =0.8.37;
 
-import {IBatchTransfer} from "./interface/IBatchTransfer.sol";
+import {IBatchTransfer} from "./interfaces/IBatchTransfer.sol";
 
 interface IERC20Minimal {
     function balanceOf(address account) external view returns (uint256);
@@ -26,8 +26,10 @@ contract BatchTransfer is IBatchTransfer {
         uint256 recipientCount = recipients.length;
         for (uint256 i = 0; i < recipientCount; i++) {
             (bool success, bytes memory data) =
+                // forge-lint: disable-next-line(arbitrary-send-eth, return-bomb)
                 recipients[i].call{value: amounts[i], gas: NATIVE_TRANSFER_GAS_LIMIT}("");
             if (!success) {
+                // forge-lint: disable-next-line(require-revert-in-loop)
                 revert NativeTransferFailed(i, recipients[i], amounts[i], data);
             }
         }
@@ -97,9 +99,11 @@ contract BatchTransfer is IBatchTransfer {
 
         for (uint256 i = 0; i < recipientCount; i++) {
             if (recipients[i] == address(0)) {
+                // forge-lint: disable-next-line(require-revert-in-loop)
                 revert ZeroRecipient(i);
             }
             if (amounts[i] == 0) {
+                // forge-lint: disable-next-line(require-revert-in-loop)
                 revert ZeroAmount(i);
             }
             totalAmount += amounts[i];
@@ -116,6 +120,7 @@ contract BatchTransfer is IBatchTransfer {
         (bool success, bytes memory data) =
             token.staticcall(abi.encodeWithSelector(IERC20Minimal.balanceOf.selector, account));
         if (!success || data.length < 32) {
+            // forge-lint: disable-next-line(require-revert-in-loop)
             revert ERC20BalanceQueryFailed(token, account, data);
         }
 
@@ -140,9 +145,11 @@ contract BatchTransfer is IBatchTransfer {
         (bool success, bytes memory data) =
             token.call(abi.encodeWithSelector(IERC20Minimal.transferFrom.selector, from, to, amount));
         if (!success) {
+            // forge-lint: disable-next-line(require-revert-in-loop)
             revert ERC20TransferFailed(token, index, to, amount, data);
         }
         if (!_isSuccessfulERC20Return(data)) {
+            // forge-lint: disable-next-line(require-revert-in-loop)
             revert ERC20InvalidReturn(token, index, to, amount, data);
         }
     }
