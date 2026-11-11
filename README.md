@@ -43,9 +43,11 @@
 
 **函数参数名：`token` → `tokenAddress`（2 个入口）。** 参数名不进 selector，5 个函数的选择器全部不变；但参数名是 ABI JSON 的 `name` 字段，属于集成方 API（`naming-standards.md` §十：「`address` 类型的实体参数/字段必须带 `Address` 后缀」，§十一：参数名 = 结构体字段名 = 事件字段名，四处同源）。因此 `batchTransferERC20` 与 `erc20Balances` 的入参同步改名——**改的是参数名，不是函数名**，因为函数名进 selector 而参数名不进。
 
-**错误：13 个，其中 7 个未变、6 个改变。**
+**错误：13 个，其中 5 个未变、8 个改变。**
 
-未变：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`、`ERC20InsufficientBalance(address,address,uint256,uint256)`、`ERC20InsufficientAllowance(address,address,address,uint256,uint256)`。
+未变（选择器与旧仓相同）：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`。
+
+只改载荷命名（选择器不变，参数名属于 ABI JSON 的 `name` 字段）：`ERC20InsufficientBalance` 与 `ERC20InsufficientAllowance` 的载荷由 `(…, balance, required)` / `(…, allowanceAmount, required)` 改为 `(…, required, available)`。依据 `error-standards.md` §4：「额度：`required + available`」。这两个错误名与 OpenZeppelin `IERC20Errors` 的标准错误同名但选择器不同（本合约 `0xac083e30` / `0x9cb4340e`，OZ 标准 `0xe450d38c` / `0xfb8f41b2`），**链下按选择器识别，不要按错误名字符串识别**——`error-standards.md` 第一节明确「链下按 selector 识别，不按参数名识别」。本合约是这两个错误的产生者，不是透传者，本地声明合规。
 
 改变：
 
@@ -132,6 +134,16 @@ python3 test/deploy_scripts_test.py
 ```
 
 目录与新增网络的约定见 [`script/deploy/README.md`](script/deploy/README.md)。
+
+## 事件设计：为什么是汇总而非逐笔
+
+`event-standards.md` 有一条「不得用一条汇总事件替代 N 条事实」。**这条规则不适用于本合约**，理由如下，记在这里以免以后被当成疏漏整改：
+
+- 该规则的语境是「批量操作改变协议状态」，要求每条状态迁移都能从事件重建（`event-standards.md` §3.3、§3.4）。`BatchTransfer` **无状态**，不改变任何协议对象，只搬运资产。
+- 资产变动本身已被完整记录：ERC20 一侧每笔都有代币合约的 `Transfer` 事件，原生币一侧每笔都是可从交易回执追到的内部调用。本合约再逐笔发一遍是**同一事实由多条日志重复表达**，违反 `event-standards.md` §3.1 的反向要求。
+- 本合约的事件只补充 ERC20 `Transfer` 给不出的信息：**这批是谁发起的、总额多少、涉及几个收款方**。它是补充，不是替代。
+
+代价也不小：本仓实测 200 笔原生币批次，汇总事件相对不发事件多 **1,708 gas**，逐笔事件多 **354,203 gas**——逐笔比汇总多 **352,495 gas**，约 **1,762 gas/笔**。（测量方式：同一份源码编译出三个变体，`batchTransferNative` 分别不发事件、发一条汇总、在循环里逐笔发，用 `gasleft()` 差值比较；三个变体的外部调用与转账完全相同。）
 
 ## 合约
 

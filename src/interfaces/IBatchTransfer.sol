@@ -51,15 +51,15 @@ interface IBatchTransferErrors {
     error ERC20InsufficientBalance(
         address tokenAddress,
         address owner,
-        uint256 balance,
-        uint256 required
+        uint256 required,
+        uint256 available
     );
     error ERC20InsufficientAllowance(
         address tokenAddress,
         address owner,
         address spender,
-        uint256 allowanceAmount,
-        uint256 required
+        uint256 required,
+        uint256 available
     );
     error ERC20TransferFailed(
         address tokenAddress,

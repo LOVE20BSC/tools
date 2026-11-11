@@ -148,7 +148,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         vm.prank(sender);
         vm.expectRevert(
             abi.encodeWithSelector(
-                IBatchTransferErrors.ERC20InsufficientBalance.selector, address(token), sender, 599, 600
+                IBatchTransferErrors.ERC20InsufficientBalance.selector, address(token), sender, 600, 599
             )
         );
         batchTransfer.batchTransferERC20(address(token), recipients, amounts);
@@ -174,8 +174,8 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 address(token),
                 sender,
                 address(batchTransfer),
-                599,
-                600
+                600,
+                599
             )
         );
         batchTransfer.batchTransferERC20(address(token), recipients, amounts);

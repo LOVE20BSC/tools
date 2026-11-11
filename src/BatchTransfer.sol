@@ -47,12 +47,12 @@ contract BatchTransfer is IBatchTransfer {
 
         uint256 senderBalance = _erc20BalanceOf(tokenAddress, msg.sender);
         if (senderBalance < totalAmount) {
-            revert ERC20InsufficientBalance(tokenAddress, msg.sender, senderBalance, totalAmount);
+            revert ERC20InsufficientBalance(tokenAddress, msg.sender, totalAmount, senderBalance);
         }
 
         uint256 senderAllowance = _erc20Allowance(tokenAddress, msg.sender, address(this));
         if (senderAllowance < totalAmount) {
-            revert ERC20InsufficientAllowance(tokenAddress, msg.sender, address(this), senderAllowance, totalAmount);
+            revert ERC20InsufficientAllowance(tokenAddress, msg.sender, address(this), totalAmount, senderAllowance);
         }
 
         uint256 recipientCount = recipients.length;
