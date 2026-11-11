@@ -212,6 +212,27 @@ def network_params_keys() -> None:
             assert match.group(1).strip(), (directory / "network.params", key)
 
 
+def scripts_stay_within_bash_32() -> None:
+    """No script may use a bash-4-only construct.
+
+    macOS still ships bash 3.2 as /bin/bash and the scripts run under `#!/usr/bin/env bash`, so a
+    bash-4 expansion is not a portability nicety — it is a runtime failure. The dangerous ones fail
+    *inside* a command substitution, which turns an assertion into a comparison of two empty
+    strings that reports success while checking nothing (`script/e2e/anvil_e2e.sh` shipped that bug
+    once). `bash -n` does not catch it because the construct parses fine and only fails at
+    expansion time, so guard it statically.
+    """
+    bash4_only = re.compile(
+        r"\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,|\^\^)"  # case conversion
+        r"|\bdeclare\s+-A\b"                                    # associative arrays
+        r"|\b(mapfile|readarray)\b"                              # array readers
+        r"|\[\[\s+-v\s"                                        # -v test
+    )
+    for script in sorted((repo_root() / "script").rglob("*.sh")):
+        offenders = bash4_only.findall(script.read_text())
+        assert not offenders, f"{script} uses bash-4-only syntax: {offenders}"
+
+
 def scripts_have_shebang_and_exec_bit() -> None:
     """Every deploy script is a bash script; every step/entry script is executable.
 
@@ -914,6 +935,7 @@ def main() -> None:
     cross_repo_address_files()
     network_params_keys()
     scripts_have_shebang_and_exec_bit()
+    scripts_stay_within_bash_32()
     deploy_script_has_no_hardcoded_address()
     deploy_script_structure()
     uniswap_v2_zap_deploy_script_structure()

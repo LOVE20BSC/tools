@@ -65,7 +65,12 @@ die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 # Addresses come back in mixed case depending on the command: `cast send --create` reports the
 # contract address lower-cased from the receipt, while `cast call` returns EIP-55 checksummed
 # values. Compare addresses case-insensitively; a checksum is a display convention, not a value.
-lc() { printf '%s' "${1,,}"; }
+#
+# `tr` rather than `${1,,}`: the latter is bash 4+, and macOS still ships bash 3.2 as /bin/bash,
+# where it fails with "bad substitution" *inside* a command substitution. That failure is silent
+# here — both sides of the comparison become empty, so the assertion would pass while checking
+# nothing. See the shell self-test in the preconditions step.
+lc() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # assert_eq <label> <expected> <actual>
 assert_eq() {
@@ -162,6 +167,12 @@ for bin in anvil cast forge python3; do
     command -v "$bin" >/dev/null 2>&1 || die "$bin not found on PATH"
 done
 pass "toolchain present (anvil/cast/forge/python3)"
+
+# Guard the assertion helpers themselves. A helper that silently degrades (a shell too old for an
+# expansion, a `tr` that is not there) would turn every comparison using it into a no-op that
+# reports success, so verify the helpers before trusting any result they produce.
+[ "$(lc 'AbC')" = "abc" ] || die "lc() did not lowercase - refusing to run assertions that would silently pass"
+pass "assertion helpers behave (lc)"
 
 [ -d "$NETWORK_DIR" ] || die "network directory not found: $NETWORK_DIR"
 [ -f "$NETWORK_DIR/.account" ] || die ".account missing in $NETWORK_DIR - see script/e2e/README.md"
