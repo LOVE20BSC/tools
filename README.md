@@ -9,6 +9,7 @@
 | 子模块 | 用途 |
 | --- | --- |
 | `lib/forge-std` | 测试与脚本 |
+| `lib/openzeppelin-contracts` | `UniswapV2Zap` 的 `ReentrancyGuard` / `SafeERC20` / `Math`，版本与 `core` 同一 commit |
 
 本仓**不声明任何协议子模块**：工具合约按定义不依赖 `core` / `action` / `group-chat` / `dex`，需要的标准接口（如 ERC20 的最小读法）在本仓 `src/interfaces/` 内自行声明，避免为一个函数引入整条依赖链。`remappings.txt` 因此只有 `@forge-std/` 一条。
 
