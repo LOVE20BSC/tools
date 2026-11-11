@@ -1,0 +1,13 @@
+# UniswapV2Zap module parameters. The contract's only constructor input is `router`; it is NOT
+# recorded here, because the Router is deployed by the `dex` repository and arrives as the copied
+# addresses.uniswapv2.params (dev-standards §6.2 + §6.3: cross-repository dependencies are read from
+# the dependency's own address file, never transcribed into this module's config).
+#
+# This file therefore exists for two reasons and carries no values:
+#   - every module keeps the same shape under script/network/<network>/, so adding a parameter later
+#     needs no new file;
+#   - 12_deploy_uniswap_v2_zap.sh / 22_check_uniswap_v2_zap.sh load it, so removing it fails loudly.
+#
+# ROUTER_ADDRESS is read from addresses.uniswapv2.params, copied verbatim from:
+#   LOVE20BSC/dex: script/network/anvil31337_dev/addresses.uniswapv2.params
+# Re-copy that file after redeploying dex; do not hand-edit the copy.
