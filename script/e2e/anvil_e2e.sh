@@ -40,6 +40,12 @@ CHAIN_ID=31337
 # keystore path the production scripts use.
 ANVIL_DEFAULT_KEY="${E2E_ANVIL_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
 
+# Bound every RPC call. `cast` waits indefinitely by default, and an anvil that has bound its port
+# but is not answering yet will accept the connection and never reply -- which hangs the readiness
+# poll below forever instead of failing it. The deploy scripts inherit this too, which is what we
+# want: a stalled RPC should surface as a failure, not as a hang.
+export ETH_RPC_TIMEOUT="${E2E_RPC_TIMEOUT:-30}"
+
 KEEP=0
 for arg in "$@"; do
     case "$arg" in
@@ -92,31 +98,48 @@ assert_contains() {
 
 # --- cleanup ----------------------------------------------------------------------------------
 
+# Best effort throughout: `set -e` is still in force inside a trap, so a single failed `cp` would
+# otherwise abort the rest of the cleanup and leave anvil running plus half the files restored.
+# Each step is therefore allowed to fail; the first failure is reported but not fatal.
 cleanup() {
     local status=$?
+    set +e
+
     if [ "$KEEP" -eq 1 ]; then
         printf '\n--keep given: leaving anvil (pid %s) running on %s\n' "${ANVIL_PID:-none}" "$RPC_URL"
         if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
-            printf 'Address files left as deployed; backups in %s\n' "$BACKUP_DIR"
+            printf 'Deployed state left as is; backups in %s\n' "$BACKUP_DIR"
+            printf 'Stop anvil yourself before the next run: kill %s\n' "${ANVIL_PID:-?}"
         fi
         return "$status"
     fi
-    if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
-        for f in "$BACKUP_DIR"/*; do
-            [ -e "$f" ] || continue
-            cp "$f" "$NETWORK_DIR/$(basename "$f")"
-        done
-        rm -rf "$BACKUP_DIR"
-        printf '\nAddress files restored.\n'
-    fi
+
+    # Stop the chain first: restoring files while anvil still writes `broadcast/` races with it, and
+    # a leftover anvil is the most disruptive thing to leave behind (the next run refuses to start).
     if [ -n "$ANVIL_PID" ] && kill -0 "$ANVIL_PID" 2>/dev/null; then
         kill "$ANVIL_PID" 2>/dev/null || true
         wait "$ANVIL_PID" 2>/dev/null || true
-        printf 'anvil stopped.\n'
+        printf '\nanvil stopped.\n'
+    fi
+
+    if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
+        local f
+        for f in "$BACKUP_DIR"/*; do
+            [ -e "$f" ] || continue
+            cp "$f" "$NETWORK_DIR/$(basename "$f")" || \
+                printf 'warning: could not restore %s - original kept in %s\n' "$(basename "$f")" "$BACKUP_DIR"
+        done
+        rm -rf "$BACKUP_DIR" || true
+        printf 'Address and network files restored.\n'
     fi
     return "$status"
 }
-trap cleanup EXIT INT TERM
+
+# The EXIT trap only runs cleanup. INT/TERM must also terminate: a trap that merely returns resumes
+# the script, which would carry on against a stopped chain and could still print a success summary.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # --- helpers ----------------------------------------------------------------------------------
 
@@ -200,16 +223,17 @@ for art in "$WETH_ART" "$FACTORY_ART" "$ROUTER_ART" "$TOKEN_ART"; do
 done
 pass "dex build artifacts present"
 
-if cast chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1; then
+if cast chain-id --rpc-url "$RPC_URL" --rpc-timeout 2 >/dev/null 2>&1; then
     die "something is already listening on $RPC_URL - stop it or set E2E_PORT"
 fi
 
-# Back up every address file this run may rewrite, so a failure cannot leave the worktree dirty.
+# Back up every file this run rewrites, so a failure cannot leave the worktree dirty. network.params
+# is included because the run repoints RPC_URL at E2E_PORT (see below).
 BACKUP_DIR=$(mktemp -d)
-for f in "$NETWORK_DIR"/addresses.*.params; do
+for f in "$NETWORK_DIR"/addresses.*.params "$NETWORK_DIR/network.params"; do
     [ -e "$f" ] && cp "$f" "$BACKUP_DIR/"
 done
-pass "address files backed up"
+pass "address and network files backed up"
 
 # --- chain and Uniswap stack ------------------------------------------------------------------
 
@@ -218,11 +242,22 @@ step "2. Fresh anvil + Uniswap V2 stack"
 anvil --chain-id "$CHAIN_ID" --port "$E2E_PORT" --silent >/dev/null 2>&1 &
 ANVIL_PID=$!
 for _ in $(seq 1 100); do
-    cast chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1 && break
+    cast chain-id --rpc-url "$RPC_URL" --rpc-timeout 2 >/dev/null 2>&1 && break
     sleep 0.1
 done
-cast chain-id --rpc-url "$RPC_URL" >/dev/null 2>&1 || die "anvil did not start"
+cast chain-id --rpc-url "$RPC_URL" --rpc-timeout 2 >/dev/null 2>&1 || die "anvil did not start"
 assert_eq "chain is empty at block 0" "0" "$(cast block-number --rpc-url "$RPC_URL")"
+
+# The deploy scripts read RPC_URL from network.params and deliberately ignore the environment
+# (dev-standards §6.2: values come from files only), so pointing only this script at E2E_PORT would
+# leave the dependency stack on one port and the tools on another -- with a chain-ID match the
+# tools would silently deploy to whichever chain happens to sit on 8545.
+if grep -q '^RPC_URL=' "$NETWORK_DIR/network.params"; then
+    sed -i.bak "s|^RPC_URL=.*|RPC_URL=$RPC_URL|" "$NETWORK_DIR/network.params" && rm -f "$NETWORK_DIR/network.params.bak"
+else
+    printf 'RPC_URL=%s\n' "$RPC_URL" >> "$NETWORK_DIR/network.params"
+fi
+pass "network.params RPC_URL points at $RPC_URL"
 
 WETH=$(deploy_from_artifact "$WETH_ART"); pass "WETH9 deployed at $WETH"
 FACTORY=$(deploy_from_artifact "$FACTORY_ART" "constructor(address)" "$ACCOUNT_ADDRESS")

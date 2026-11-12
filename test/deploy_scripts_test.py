@@ -222,14 +222,23 @@ def scripts_stay_within_bash_32() -> None:
     once). `bash -n` does not catch it because the construct parses fine and only fails at
     expansion time, so guard it statically.
     """
+    # The parameter name may be a positional or a special parameter too: the bug this guards
+    # against was `${1,,}`, which an identifier-only class would miss. `1, @, *, #, ?, $, !, -` are
+    # all legal there.
     bash4_only = re.compile(
-        r"\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,|\^\^)"  # case conversion
-        r"|\bdeclare\s+-A\b"                                    # associative arrays
-        r"|\b(mapfile|readarray)\b"                              # array readers
-        r"|\[\[\s+-v\s"                                        # -v test
+        r"\$\{[0-9@*#?!$-]+(,,|\^\^)"                                   # positional/special case conversion
+        r"|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,|\^\^)"          # named case conversion
+        r"|\bdeclare\s+-A\b"                                           # associative arrays
+        r"|\b(mapfile|readarray)\b"                                     # array readers
+        r"|\[\[\s+-v\s"                                               # -v test
     )
     for script in sorted((repo_root() / "script").rglob("*.sh")):
-        offenders = bash4_only.findall(script.read_text())
+        # Strip comments first: the helper documents the very construct it forbids, and scanning
+        # the raw text would flag that explanation as a violation.
+        code = "\n".join(
+            line for line in script.read_text().splitlines() if not line.lstrip().startswith("#")
+        )
+        offenders = bash4_only.findall(code)
         assert not offenders, f"{script} uses bash-4-only syntax: {offenders}"
 
 
@@ -379,6 +388,7 @@ def fake_tool(tool: str, args: list) -> int:
         elif args[0] == "call":
             signature = args[2]
             overrides = json.loads(os.environ.get("MOCK_CALL_OVERRIDES", "{}"))
+            failing = set(json.loads(os.environ.get("MOCK_CALL_FAILURES", "[]")))
             if signature in overrides:
                 print(overrides[signature])
             elif signature == "NATIVE_TRANSFER_GAS_LIMIT()(uint256)":
@@ -392,6 +402,9 @@ def fake_tool(tool: str, args: list) -> int:
                 "factory()(address)",
                 "WETH()(address)",
             }:
+                if signature in failing:
+                    # Model a read that fails on chain: the scripts fall back to the ERROR sentinel.
+                    return 1
                 print(data["calls"][signature])
             else:
                 raise AssertionError(args)
@@ -824,6 +837,16 @@ def zap_behavioural_checks() -> int:
         assert "not deployed" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("22_check_uniswap_v2_zap.sh", False, RPC_CHAIN="56")
         assert "chain ID" in result.stdout + result.stderr, result.stdout + result.stderr
+
+        # 4b. Both reads failing must not compare equal to each other. A run where the zap and the
+        # Router are both unreadable is exactly the "wrong zap deployed" case this step exists to
+        # catch, so the ERROR sentinel has to be rejected before the equality check.
+        result, _ = run("22_check_uniswap_v2_zap.sh", False,
+                        MOCK_CALL_FAILURES=json.dumps(
+                            ["WRAPPED_NATIVE_TOKEN()(address)", "WETH()(address)"]))
+        assert "WRAPPED_NATIVE_TOKEN()" in result.stdout + result.stderr, result.stdout + result.stderr
+        assert "could not be read" in result.stdout + result.stderr, result.stdout + result.stderr
+        assert "verification(s) failed" in result.stdout + result.stderr, result.stdout + result.stderr
 
         # 5. A missing copied dependency file fails loudly instead of deploying against nothing.
         dependency.unlink()

@@ -11,7 +11,7 @@
 | `lib/forge-std` | 测试与脚本 |
 | `lib/openzeppelin-contracts` | `UniswapV2Zap` 的 `ReentrancyGuard` / `SafeERC20` / `Math`，版本与 `core` 同一 commit |
 
-本仓**不声明任何协议子模块**：工具合约按定义不依赖 `core` / `action` / `group-chat` / `dex`，需要的标准接口（如 ERC20 的最小读法）在本仓 `src/interfaces/` 内自行声明，避免为一个函数引入整条依赖链。`remappings.txt` 因此只有 `@forge-std/` 一条。
+本仓**不声明任何协议子模块**：工具合约按定义不依赖 `core` / `action` / `group-chat` / `dex`，需要的标准接口（如 ERC20 的最小读法）在本仓 `src/interfaces/` 内自行声明，避免为一个函数引入整条依赖链。`remappings.txt` 因此只有 `@forge-std/` 与 `@openzeppelin/contracts/` 两条。
 
 `src/interfaces/` 是本仓自有 ABI 的唯一来源（开发规范 §4.1）：`IBatchTransfer.sol` 与 `IUniswapV2Zap.sol` 分别声明两个合约的函数、事件与错误；`IERC20Minimal.sol`、`IUniswapV2Factory.sol`、`IUniswapV2Pair.sol`、`IUniswapV2Router02.sol`、`IWrappedNative.sol` 是最小外部调用面——各自只声明对应实现会编码的 selector，不是 LOVE20 自有 ABI，也不代表本仓认领 ERC20 / Uniswap V2 / WETH9 标准；放在同一目录只为让本仓所有 ABI 声明只有一个位置。
 
@@ -21,7 +21,7 @@
 
 - 仓库骨架与工具链已建立，编译基线为 Solidity `0.8.37`、Foundry `1.8.1`、`evm_version = "osaka"`，不使用 `via_ir`。
 - `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，之后追加一个规范整改提交。27 个用例全通过（24 个合约用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,495 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
-- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**两个步骤均已完成**：合约、接口与四个最小外部接口落地；`error` 按 `error-standards.md` 拆分为一条件一错误；mock 补齐到真实 constant-product 数学与协议费分支；移植 43 个源用例并补足新增错误的可达路径，共 61 个用例（含 2 个 fuzz）全通过；部署脚本、地址参数文件与部署回归测试落地。运行时字节码 9,469 字节（EIP-170 上限 24,576）。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
+- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**两个步骤均已完成**：合约、接口与四个最小外部接口落地；`error` 按 `error-standards.md` 拆分为一条件一错误；mock 补齐到真实 constant-product 数学与协议费分支；移植 43 个源用例并补足新增错误的可达路径，共 62 个用例（含 2 个 fuzz）全通过；部署脚本、地址参数文件与部署回归测试落地。运行时字节码 9,528 字节（EIP-170 上限 24,576）。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
 
 ## 与旧仓的差异
 
@@ -29,7 +29,16 @@
 
 ### ABI 变更清单
 
-旧仓 ABI 的 `abi` 字段（排序键 JSON）sha256 为 `6f03a9bc333ff959cd37b30c0381a6c0d520d31b4e6182641c7d3ab218e87a9a`，本仓为 `7051f241837d43b661280934a73c7f2f7ea1df01c7f22cb43feb618000abad15`。**两者不同**，逐项如下。
+两仓的 ABI **不同**，逐项如下。本节不登记 ABI 哈希：哈希每次改名都会变，钉在文档里只会变成过期数字（它已经过期过两次）。需要精确对账时直接用工具比：
+
+```sh
+# 本仓
+forge inspect UniswapV2Zap abi --json | python3 -c 'import json,sys,hashlib;print(hashlib.sha256(json.dumps(json.load(sys.stdin),sort_keys=True).encode()).hexdigest())'
+# 旧仓
+git -C ../LOVE20TKM/periphery show <commit>:out/UniswapV2Zap.sol/UniswapV2Zap.json > /tmp/old.json
+python3 -c 'import json,hashlib;print(hashlib.sha256(json.dumps(json.load(open("/tmp/old.json"))["abi"],sort_keys=True).encode()).hexdigest())'
+```
+
 
 **函数：5 个，全部未变**（选择器一致）。
 

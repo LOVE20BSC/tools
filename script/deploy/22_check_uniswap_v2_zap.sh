@@ -96,6 +96,18 @@ verify_value() {
         actual=$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')
     fi
 
+
+    # A failed `cast call` falls back to the ERROR sentinel. Two failed reads compare equal to each
+    # other, so verifying before rejecting the sentinel would let a run where both sides of the
+    # comparison are unreadable report success -- which is the one case this check exists to catch.
+    if [ "$expected" = "ERROR" ] || [ "$actual" = "ERROR" ]; then
+        echo "✗ $field_name"
+        echo "    expected: $expected"
+        echo "    actual:   $actual"
+        echo "    cause: at least one side could not be read"
+        return 1
+    fi
+
     if [ "$expected" = "$actual" ]; then
         echo "✓ $field_name = $actual"
         return 0
