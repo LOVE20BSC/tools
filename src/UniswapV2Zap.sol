@@ -20,7 +20,29 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
     using SafeERC20 for IERC20;
 
     uint256 private constant UNISWAP_V2_MINIMUM_LIQUIDITY = 1000;
+
+    /// @dev Tolerance applied to the expected output of the internal swap, in basis points. The swap
+    /// leg used to pass `amountOutMin = 1`, which delegates the whole slippage question to the caller's
+    /// `amountAMin`/`amountBMin`/`liquidityMin`. The pool cannot move between reading the reserves and
+    /// swapping inside one transaction, so `_getAmountOut` of the pre-swap reserves is what the router
+    /// should return; this bound turns a sandwich on the swap leg into a revert while leaving room for
+    /// rounding and for tokens whose transfer differs slightly from the nominal amount.
+    uint256 private constant SWAP_SLIPPAGE_TOLERANCE_BPS = 100;
+
     uint256 private constant UNISWAP_V2_MAX_RESERVE = type(uint112).max;
+
+    /// @dev Internal carrier for `zapNativeToken`'s arguments. The external signature stays positional,
+    /// but the body needs one pointer rather than eight stack slots plus its own locals.
+    struct NativeZapRequest {
+        address tokenAddress;
+        uint256 amountTokenIn;
+        uint256 amountTokenMin;
+        uint256 amountNativeMin;
+        uint256 liquidityMin;
+        address to;
+        bool refundAsNative;
+        uint256 deadline;
+    }
 
     IUniswapV2Router02 public immutable override ROUTER;
     address public immutable override FACTORY;
@@ -85,34 +107,69 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         uint256 amountNativeMin,
         uint256 liquidityMin,
         address to,
+        bool refundAsNative,
         uint256 deadline
     ) external payable override nonReentrant returns (uint256 amountToken, uint256 amountNative, uint256 liquidity) {
-        if (tokenAddress == address(0)) revert ZeroToken();
-        if (tokenAddress == WRAPPED_NATIVE_TOKEN) revert WrappedNativeTokenNotAccepted();
-        if (to == address(0)) revert ZeroRecipientAddress();
-        if (msg.value == 0 && amountTokenIn == 0) revert ZeroInputAmounts();
+        // Collect the arguments into one struct before doing anything else: eight parameters plus the
+        // locals below overflow the stack in a single frame under the standard optimizer, and the
+        // project does not enable `via_ir`. Passing a pointer keeps the external signature as it is.
+        NativeZapRequest memory request = NativeZapRequest({
+            tokenAddress: tokenAddress,
+            amountTokenIn: amountTokenIn,
+            amountTokenMin: amountTokenMin,
+            amountNativeMin: amountNativeMin,
+            liquidityMin: liquidityMin,
+            to: to,
+            refundAsNative: refundAsNative,
+            deadline: deadline
+        });
+        return _zapNativeToken(request);
+    }
 
-        uint256 tokenBalanceBefore = IERC20(tokenAddress).balanceOf(address(this));
+    function _zapNativeToken(NativeZapRequest memory request)
+        private
+        returns (uint256 amountToken, uint256 amountNative, uint256 liquidity)
+    {
+        if (request.tokenAddress == address(0)) revert ZeroToken();
+        if (request.tokenAddress == WRAPPED_NATIVE_TOKEN) revert WrappedNativeTokenNotAccepted();
+        if (request.to == address(0)) revert ZeroRecipientAddress();
+        if (msg.value == 0 && request.amountTokenIn == 0) revert ZeroInputAmounts();
+
+        uint256 tokenBalanceBefore = IERC20(request.tokenAddress).balanceOf(address(this));
         uint256 wrappedNativeBalanceBefore = IERC20(WRAPPED_NATIVE_TOKEN).balanceOf(address(this));
 
-        if (amountTokenIn > 0) {
-            IERC20(tokenAddress).safeTransferFrom(msg.sender, address(this), amountTokenIn);
+        if (request.amountTokenIn > 0) {
+            IERC20(request.tokenAddress).safeTransferFrom(msg.sender, address(this), request.amountTokenIn);
         }
         if (msg.value > 0) {
             IWrappedNative(WRAPPED_NATIVE_TOKEN).deposit{value: msg.value}();
         }
 
         (amountToken, amountNative, liquidity) = _zapNativePair(
-            tokenAddress, amountTokenIn, msg.value, amountTokenMin, amountNativeMin, liquidityMin, to, deadline
+            request.tokenAddress,
+            request.amountTokenIn,
+            msg.value,
+            request.amountTokenMin,
+            request.amountNativeMin,
+            request.liquidityMin,
+            request.to,
+            request.deadline
         );
 
-        _refundTokenExcess(tokenAddress, msg.sender, tokenBalanceBefore);
-        _refundWrappedNativeExcessAsNative(msg.sender, wrappedNativeBalanceBefore);
+        _refundTokenExcess(request.tokenAddress, msg.sender, tokenBalanceBefore);
+        // Refunding wrapped native as native token requires the caller to accept ETH. A contract
+        // caller without `receive()` would be forced to revert on every zap that leaves even one wei
+        // over, which is the common case. Callers choose; EOAs normally want the native form back.
+        if (request.refundAsNative) {
+            _refundWrappedNativeExcessAsNative(msg.sender, wrappedNativeBalanceBefore);
+        } else {
+            _refundWrappedNativeExcessAsWrapped(msg.sender, wrappedNativeBalanceBefore);
+        }
 
         emit NativeTokenZapped({
             sender: msg.sender,
-            tokenAddress: tokenAddress,
-            to: to,
+            tokenAddress: request.tokenAddress,
+            to: request.to,
             amountToken: amountToken,
             amountNative: amountNative,
             liquidity: liquidity
@@ -314,8 +371,13 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
         path[0] = tokenIn;
         path[1] = tokenOut;
 
+        uint256 expectedOut = _getAmountOut(amountToSwap, reserveIn, reserveOut);
+        uint256 amountOutMin = expectedOut - (expectedOut * SWAP_SLIPPAGE_TOLERANCE_BPS) / 10_000;
+        if (amountOutMin == 0) amountOutMin = 1;
+
         _approveToken(tokenIn, amountToSwap);
-        uint256[] memory amounts = ROUTER.swapExactTokensForTokens(amountToSwap, 1, path, address(this), deadline);
+        uint256[] memory amounts =
+            ROUTER.swapExactTokensForTokens(amountToSwap, amountOutMin, path, address(this), deadline);
 
         amountInAfterSwap = amountIn - amountToSwap;
         amountOutAfterSwap = amountOutAlready + amounts[1];
@@ -441,6 +503,13 @@ contract UniswapV2Zap is ReentrancyGuard, IUniswapV2Zap {
 
     function _approveToken(address tokenAddress, uint256 amount) internal {
         IERC20(tokenAddress).forceApprove(address(ROUTER), amount);
+    }
+
+    function _refundWrappedNativeExcessAsWrapped(address to, uint256 balanceBefore) internal {
+        uint256 balance = IERC20(WRAPPED_NATIVE_TOKEN).balanceOf(address(this));
+        if (balance > balanceBefore) {
+            IERC20(WRAPPED_NATIVE_TOKEN).safeTransfer(to, balance - balanceBefore);
+        }
     }
 
     function _refundTokenExcess(address tokenAddress, address to, uint256 balanceBefore) internal {

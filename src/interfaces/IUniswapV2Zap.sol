@@ -112,6 +112,7 @@ interface IUniswapV2Zap is IUniswapV2ZapEvents, IUniswapV2ZapErrors {
         uint256 amountNativeMin,
         uint256 liquidityMin,
         address to,
+        bool refundAsNative,
         uint256 deadline
     ) external payable returns (uint256 amountToken, uint256 amountNative, uint256 liquidity);
 

@@ -157,16 +157,16 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
     function testZapNativeTokenParamValidationReverts() public {
         vm.expectRevert(IUniswapV2ZapErrors.ZeroToken.selector);
-        zap.zapNativeToken(address(0), 0, 1, 1, 1, recipient, block.timestamp + 1);
+        zap.zapNativeToken(address(0), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         vm.expectRevert(IUniswapV2ZapErrors.WrappedNativeTokenNotAccepted.selector);
-        zap.zapNativeToken(address(weth), 0, 1, 1, 1, recipient, block.timestamp + 1);
+        zap.zapNativeToken(address(weth), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         vm.expectRevert(IUniswapV2ZapErrors.ZeroRecipientAddress.selector);
-        zap.zapNativeToken{value: 1}(address(tokenA), 0, 1, 1, 1, address(0), block.timestamp + 1);
+        zap.zapNativeToken{value: 1}(address(tokenA), 0, 1, 1, 1, address(0), true, block.timestamp + 1);
 
         vm.expectRevert(IUniswapV2ZapErrors.ZeroInputAmounts.selector);
-        zap.zapNativeToken(address(tokenA), 0, 1, 1, 1, recipient, block.timestamp + 1);
+        zap.zapNativeToken(address(tokenA), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
     }
 
     function testQuoteParamValidationReverts() public {
@@ -264,7 +264,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         vm.prank(user);
         (uint256 amountToken, uint256 amountNative, uint256 liquidity) =
-            zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, block.timestamp + 1);
+            zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         assertGt(amountToken, 0, "amountToken");
         assertGt(amountNative, 0, "amountNative");
@@ -280,7 +280,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         vm.prank(user);
         (uint256 amountToken, uint256 amountNative, uint256 liquidity) =
-            zap.zapNativeToken(address(tokenA), 100 ether, 1, 1, 1, recipient, block.timestamp + 1);
+            zap.zapNativeToken(address(tokenA), 100 ether, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         assertGt(amountToken, 0, "amountToken");
         assertGt(amountNative, 0, "amountNative");
@@ -294,7 +294,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         vm.prank(user);
         (,, uint256 liquidity) =
-            zap.zapNativeToken{value: 5 ether}(address(tokenA), 200 ether, 1, 1, 1, recipient, block.timestamp + 1);
+            zap.zapNativeToken{value: 5 ether}(address(tokenA), 200 ether, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         assertGt(liquidity, 0, "liquidity");
         _assertNoNativeDust();
@@ -352,7 +352,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         vm.startPrank(user);
         tokenA.approve(address(zap), amountTokenIn);
         (uint256 amountToken, uint256 amountNative, uint256 liquidity) = zap.zapNativeToken{value: amountNativeIn}(
-            address(tokenA), amountTokenIn, 1, 1, 1, recipient, block.timestamp + 1
+            address(tokenA), amountTokenIn, 1, 1, 1, recipient, true, block.timestamp + 1
         );
         vm.stopPrank();
 
@@ -412,7 +412,9 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         params.amountBMin = _minAfterSlippage(quote.amountBUsed, 100);
         params.liquidityMin = _minAfterSlippage(quote.liquidity, 100);
 
-        vm.expectRevert();
+        // The price moved past the caller's mins, so `addLiquidity` rejects it. Pinning the router's
+        // message proves the revert comes from the slippage guard and not from some earlier step.
+        vm.expectRevert(bytes("UniswapV2Router: INSUFFICIENT_B_AMOUNT"));
         vm.prank(user);
         zap.zapToken(params);
     }
@@ -427,7 +429,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         vm.prank(user);
         (uint256 amountToken, uint256 amountNative, uint256 liquidity) = zap.zapNativeToken{value: 10 ether}(
-            address(tokenA), 0, amountTokenMin, amountNativeMin, liquidityMin, recipient, block.timestamp + 1
+            address(tokenA), 0, amountTokenMin, amountNativeMin, liquidityMin, recipient, true, block.timestamp + 1
         );
 
         assertGe(amountToken, amountTokenMin, "token slippage");
@@ -441,7 +443,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         _moveNativePairPriceWithNativeIn(50 ether);
 
-        vm.expectRevert();
+        vm.expectRevert(bytes("UniswapV2Router: INSUFFICIENT_B_AMOUNT"));
         vm.prank(user);
         zap.zapNativeToken{value: 10 ether}(
             address(tokenA),
@@ -449,7 +451,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
             _minAfterSlippage(quote.amountTokenUsed, 100),
             _minAfterSlippage(quote.amountNativeUsed, 100),
             _minAfterSlippage(quote.liquidity, 100),
-            recipient,
+            recipient, true,
             block.timestamp + 1
         );
     }
@@ -543,7 +545,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         vm.prank(user);
         (uint256 amountToken, uint256 amountNative, uint256 liquidity) =
-            zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, block.timestamp + 1);
+            zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         assertEq(amountToken, quote.amountTokenUsed, "token used");
         assertEq(amountNative, quote.amountNativeUsed, "native used");
@@ -591,6 +593,36 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
 
         ZapQuote memory noGrowthQuote = zap.quoteZapToken(address(tokenA), address(tokenB), 10 ether, 10 ether);
         assertEq(noGrowthQuote.liquidity, 10 ether, "no growth liquidity");
+    }
+
+
+    /// @dev The deterministic fee tests above exercise three specific states. This one varies the pool
+    /// growth that drives the protocol-fee mint, so the projection is checked against execution across
+    /// the whole range rather than at hand-picked points — the fee branch is where the two used to
+    /// disagree.
+    function testFuzzQuoteMatchesExecutionWithProtocolFee(uint96 growthSeed) public {
+        factory.setFeeTo(address(0xfee));
+        _fundUser(50 ether, 50 ether);
+        vm.prank(user);
+        zap.zapToken(_params(address(tokenA), address(tokenB), 10 ether, 10 ether));
+
+        uint256 growth = bound(uint256(growthSeed), 0, 100 ether);
+        if (growth > 0) {
+            tokenA.mint(address(pairAB), growth);
+            pairAB.addToReserve(address(tokenA), growth);
+        }
+
+        ZapQuote memory quote = zap.quoteZapToken(address(tokenA), address(tokenB), 5 ether, 3 ether);
+        _fundUser(5 ether, 3 ether);
+
+        vm.prank(user);
+        (uint256 amountA, uint256 amountB, uint256 liquidity) = zap.zapToken(_params(
+            address(tokenA), address(tokenB), 5 ether, 3 ether
+        ));
+
+        assertEq(amountA, quote.amountAUsed, "amountA");
+        assertEq(amountB, quote.amountBUsed, "amountB");
+        assertEq(liquidity, quote.liquidity, "liquidity");
     }
 
     function testQuoteZapTokenFeeOnGrowthInflatesTheProjectedSupply() public {
@@ -848,7 +880,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         );
         vm.prank(user);
         zap.zapNativeToken{value: 10 ether}(
-            address(tokenA), 0, 1, 1, type(uint256).max, recipient, block.timestamp + 1
+            address(tokenA), 0, 1, 1, type(uint256).max, recipient, true, block.timestamp + 1
         );
     }
 
@@ -882,7 +914,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         vm.expectRevert("UniswapV2Router: INSUFFICIENT_B_AMOUNT");
         vm.prank(user);
         zap.zapNativeToken{value: 10 ether}(
-            address(tokenA), 100 ether, type(uint256).max, 1, 1, recipient, block.timestamp + 1
+            address(tokenA), 100 ether, type(uint256).max, 1, 1, recipient, true, block.timestamp + 1
         );
     }
 
@@ -923,7 +955,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         weth.transfer(address(zap), existingWrappedNative);
 
         vm.prank(user);
-        zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, block.timestamp + 1);
+        zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         assertEq(tokenA.balanceOf(address(zap)), existingToken, "existing token stays");
         assertEq(weth.balanceOf(address(zap)), existingWrappedNative, "existing wrapped native stays");
@@ -946,7 +978,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         _fundUserTokenA(200 ether);
 
         vm.prank(user);
-        zap.zapNativeToken{value: 5 ether}(address(tokenA), 200 ether, 1, 1, 1, recipient, block.timestamp + 1);
+        zap.zapNativeToken{value: 5 ether}(address(tokenA), 200 ether, 1, 1, 1, recipient, true, block.timestamp + 1);
 
         // Conservation over both legs: the amount used plus the swap leg must equal what left the
         // caller. The zap keeps nothing, so whatever was not used came straight back.
@@ -1002,7 +1034,7 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         });
 
         vm.prank(user);
-        zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, block.timestamp + 1);
+        zap.zapNativeToken{value: 10 ether}(address(tokenA), 0, 1, 1, 1, recipient, true, block.timestamp + 1);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -1013,7 +1045,20 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
         RejectNativeZapCaller caller = new RejectNativeZapCaller(zap);
 
         vm.expectRevert(IUniswapV2ZapErrors.NativeRefundFailed.selector);
-        caller.zapNativeToken{value: 10 ether}(address(tokenA), recipient, block.timestamp + 1);
+        caller.zapNativeToken{value: 10 ether}(address(tokenA), recipient, true, block.timestamp + 1);
+    }
+
+    /// @dev The same contract caller succeeds when it asks for the refund in wrapped form: that is the
+    /// whole point of the switch, since a contract without `receive()` is the common integration and
+    /// the zap almost always leaves a dust amount over.
+    function testZapNativeTokenSucceedsForContractCallerWhenRefundIsWrapped() public {
+        RejectNativeZapCaller caller = new RejectNativeZapCaller(zap);
+
+        caller.zapNativeToken{value: 10 ether}(address(tokenA), address(caller), false, block.timestamp + 1);
+
+        // The LP goes to the caller, and any wrapped-native dust stayed with the caller as WETH.
+        assertGt(pairNativeA.balanceOf(address(caller)), 0, "caller received LP");
+        assertEq(address(caller).balance, 0, "caller received no native token");
     }
 
     function testPairNotFoundSingleTokenReverts() public {
@@ -1288,6 +1333,129 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
                 - reserveIn * 1_997
         ) / 1_994;
     }
+
+    /// @dev Independent optimality check for the swap amount the zap derives.
+    ///
+    /// The two "formula precision" tests compare the contract against `_formulaSwapAmount`, which is a
+    /// transcription of the same closed form — that catches transcription drift but says nothing about
+    /// whether the closed form is right. This searches the whole feasible range instead: for every
+    /// candidate swap amount it applies the real `getAmountOut` and the pair's real optimal-liquidity
+    /// math, then requires the contract's choice to be at the maximum. A wrong closed form would show up
+    /// as a candidate with strictly more liquidity.
+    function testFormulaSwapAmountIsOptimalAmongAllCandidates() public view {
+        // A deliberately small pool so a bounded scan is affordable, and inputs that genuinely need a
+        // swap. The scan samples the feasible range, then refines inside the winning bracket; the
+        // assertion is that no sampled candidate beats the contract's choice.
+        uint256 reserveIn = 1_000 ether;
+        uint256 reserveOut = 1_000 ether;
+        uint256 amountIn = 300 ether;
+        uint256 amountOutAlready = 10 ether;
+
+        uint256 chosen = _formulaSwapAmount(reserveIn, reserveOut, amountIn, amountOutAlready);
+
+        (uint256 best, uint256 bestLiquidity) = _bestSwapAmountOver(
+            reserveIn, reserveOut, amountIn, amountOutAlready, 0, amountIn, 200
+        );
+        uint256 bracket = amountIn / 200;
+        uint256 lo = best > bracket ? best - bracket : 0;
+        uint256 hi = best + bracket < amountIn ? best + bracket : amountIn;
+        (best, bestLiquidity) = _bestSwapAmountOver(reserveIn, reserveOut, amountIn, amountOutAlready, lo, hi, 200);
+
+        uint256 chosenLiquidity = _liquidityAtSwapAmount(reserveIn, reserveOut, amountIn, amountOutAlready, chosen);
+
+        assertGe(chosenLiquidity, bestLiquidity, "the derived swap amount must not be beaten by any sampled candidate");
+        assertLe(chosen > best ? chosen - best : best - chosen, bracket, "derived amount sits far from the sampled optimum");
+    }
+
+    /// @dev Samples `samples + 1` swap amounts across [lo, hi] and returns the one yielding the most
+    /// liquidity, using the mock's real `getAmountOut` and the pair's real mint math.
+    function _bestSwapAmountOver(
+        uint256 reserveIn,
+        uint256 reserveOut,
+        uint256 amountIn,
+        uint256 amountOutAlready,
+        uint256 lo,
+        uint256 hi,
+        uint256 samples
+    ) internal view returns (uint256 best, uint256 bestLiquidity) {
+        uint256 step = (hi - lo) / samples;
+        if (step == 0) step = 1;
+        for (uint256 s = lo; s <= hi; s += step) {
+            uint256 liquidity = _liquidityAtSwapAmount(reserveIn, reserveOut, amountIn, amountOutAlready, s);
+            if (liquidity > bestLiquidity) {
+                bestLiquidity = liquidity;
+                best = s;
+            }
+            if (s > hi - step) break; // avoid wrapping past the upper bound
+        }
+    }
+
+    /// @dev Liquidity obtained for a given swap amount, using the mock's real `getAmountOut` and the
+    /// pair's real optimal-amount / mint math. No reimplementation of the equation under test.
+    function _liquidityAtSwapAmount(
+        uint256 reserveIn,
+        uint256 reserveOut,
+        uint256 amountIn,
+        uint256 amountOutAlready,
+        uint256 swapAmount
+    ) internal view returns (uint256 liquidity) {
+        if (swapAmount > amountIn) return 0;
+        // `getAmountOut` rejects a zero input; no swap simply means no output.
+        uint256 out = swapAmount == 0 ? 0 : router.getAmountOut(swapAmount, reserveIn, reserveOut);
+
+        uint256 reserveInAfter = reserveIn + swapAmount;
+        uint256 reserveOutAfter = reserveOut - out;
+        uint256 amountInAfter = amountIn - swapAmount;
+        uint256 amountOutAfter = amountOutAlready + out;
+
+        (uint256 usedIn, uint256 usedOut) = _optimalAmounts(reserveInAfter, reserveOutAfter, amountInAfter, amountOutAfter);
+        if (usedIn == 0 || usedOut == 0) return 0;
+        liquidity = Math.sqrt(usedIn * usedOut);
+    }
+
+    /// @dev UniswapV2Router02 `_addLiquidity`'s optimal-amount branch, called through the library path.
+    function _optimalAmounts(uint256 reserveA, uint256 reserveB, uint256 amountADesired, uint256 amountBDesired)
+        internal
+        pure
+        returns (uint256 amountA, uint256 amountB)
+    {
+        if (reserveA == 0 && reserveB == 0) return (amountADesired, amountBDesired);
+        uint256 amountBOptimal = (amountADesired * reserveB) / reserveA;
+        if (amountBOptimal <= amountBDesired) return (amountADesired, amountBOptimal);
+        uint256 amountAOptimal = (amountBDesired * reserveA) / reserveB;
+        return (amountAOptimal, amountBDesired);
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Swap-leg slippage floor
+    // ----------------------------------------------------------------------------------------
+
+    /// @dev The internal swap used to pass `amountOutMin = 1`, so a manipulated swap output would be
+    /// accepted and only the later `addLiquidity` mins stood between a user and a bad price. The floor
+    /// is now derived from `_getAmountOut` of the pre-swap reserves, which is what the router should
+    /// return inside one transaction. Feeding 1 wei back must be rejected on the swap leg itself, and
+    /// the router's own message is what proves it — `addLiquidity` failing would say INSUFFICIENT_A/B.
+    function testZapTokenRevertsWhenSwapOutputIsBelowTheDerivedFloor() public {
+        _fundUser(200 ether, 10 ether);
+        router.setSwapOutputOverride(true, 1);
+
+        vm.prank(user);
+        vm.expectRevert(bytes("UniswapV2Router: INSUFFICIENT_OUTPUT_AMOUNT"));
+        zap.zapToken(_params(address(tokenA), address(tokenB), 200 ether, 10 ether));
+    }
+
+    /// @dev A swap output just above the floor is still accepted: the bound must not be so tight that
+    /// it rejects ordinary rounding.
+    function testZapTokenAcceptsSwapOutputNearTheDerivedFloor() public {
+        _fundUser(200 ether, 10 ether);
+
+        ZapQuote memory quote = zap.quoteZapToken(address(tokenA), address(tokenB), 200 ether, 10 ether);
+        assertGt(quote.amountOutFromSwap, 0, "the scenario must actually swap");
+        router.setSwapOutputOverride(true, quote.amountOutFromSwap);
+
+        vm.prank(user);
+        zap.zapToken(_params(address(tokenA), address(tokenB), 200 ether, 10 ether));
+    }
 }
 
 contract RejectNativeZapCaller {
@@ -1297,11 +1465,12 @@ contract RejectNativeZapCaller {
         zap = zap_;
     }
 
-    function zapNativeToken(address token, address to, uint256 deadline) external payable {
-        zap.zapNativeToken{value: msg.value}(token, 0, 1, 1, 1, to, deadline);
+    function zapNativeToken(address token, address to, bool refundAsNative, uint256 deadline) external payable {
+        zap.zapNativeToken{value: msg.value}(token, 0, 1, 1, 1, to, refundAsNative, deadline);
     }
 
     receive() external payable {
         revert("NATIVE_REJECTED");
     }
+
 }
