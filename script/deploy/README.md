@@ -44,9 +44,9 @@ script/
 | --- | --- |
 | `one_click_deploy_batch_transfer.sh` | 纯编排：解析一次 keystore 密码 → 备份旧地址文件 → 依次跑 `11` / `21` / `31` → 校验失败时回滚地址文件并退出非零。不 source 任何配置文件，也不重复各步骤的校验。 |
 | `11_deploy_batch_transfer.sh` | 自载入 `network.params` / `batch-transfer.params` / `.account`，核对链 ID，用 `--password-file`（权限 600 的临时文件）调 `forge script` 广播；从部署日志取 `BATCH_TRANSFER_ADDRESS=`，核对本次运行刷新过 `broadcast/DeployBatchTransfer.s.sol/<chain-id>/run-latest.json`，最后**原子替换**地址文件（同目录临时文件 + `mv`）。 |
-| `21_check_batch_transfer.sh` | 独立、只读、可重复：断言地址文件键集合恰好是 `BATCH_TRANSFER_ADDRESS`，核对链 ID，`cast code` 确认有代码，回读 `NATIVE_TRANSFER_GAS_LIMIT()` 必须为 `50000`。地址为空/零地址/格式非法时在逐项链上调用之前就失败。 |
+| `21_check_batch_transfer.sh` | 独立、只读、可重复：断言地址文件键集合恰好是 `BATCH_TRANSFER_ADDRESS`，核对链 ID，`cast code` 确认有代码。合约不暴露任何部署期常量（`gasLimit` 是调用入参），因此没有值可回读；行为由测试套件覆盖。地址为空/零地址/格式非法时在触链之前就失败。 |
 | `31_verify_batch_transfer.sh` | 自载入 `network.params` / `verifier.params` / 地址文件，链 ID 列在 `VERIFY_SKIP_CHAIN_IDS` 时跳过并返回 0，否则用 `ETHERSCAN_VERIFIER_URL` + `ETHERSCAN_API_KEY` 提交 `forge verify-contract`。BatchTransfer 无构造参数，不传 `--constructor-args`。 |
-| `DeployBatchTransfer.s.sol` | 部署与部署期校验：`_loadConfig` 只读 `CHAIN_ID`（合约无构造参数），`_validateConfig` 在 `startBroadcast()` 前核对 `block.chainid`，`_validateDeployment` 在 `stopBroadcast()` 后确认有代码且 `NATIVE_TRANSFER_GAS_LIMIT()` 为 50000，最后打印 `BATCH_TRANSFER_ADDRESS=<addr>` 供 `11` 提取。 |
+| `DeployBatchTransfer.s.sol` | 部署与部署期校验：`_loadConfig` 只读 `CHAIN_ID`（合约无构造参数），`_validateConfig` 在 `startBroadcast()` 前核对 `block.chainid`，`_validateDeployment` 在 `stopBroadcast()` 后确认有代码，最后打印 `BATCH_TRANSFER_ADDRESS=<addr>` 供 `11` 提取。 |
 | `one_click_deploy_uniswap_v2_zap.sh` | 纯编排：解析一次 keystore 密码 → 备份旧地址文件 → 依次跑 `12` / `22` / `32` → 校验失败时回滚地址文件并退出非零。不 source 任何配置文件，也不重复各步骤的校验。**不部署 Router**：那是 `dex` 的模块。 |
 | `12_deploy_uniswap_v2_zap.sh` | 自载入 `network.params` / `uniswap-v2-zap.params` / `addresses.uniswapv2.params`（跨库依赖）/ `.account`，先断言依赖文件键集合恰为 `FACTORY_ADDRESS` `ROUTER_ADDRESS` 且 Router 非零，再核对链 ID，用 `--password-file` 调 `forge script` 广播；从部署日志取 `UNISWAP_V2_ZAP_ADDRESS=`，核对本次运行刷新过 broadcast 产物，最后**原子替换**地址文件。 |
 | `22_check_uniswap_v2_zap.sh` | 独立、只读、可重复：断言两份地址文件的键集合，核对链 ID 与 `cast code`，回读 `ROUTER()` 并与依赖文件对账；`FACTORY()` / `WRAPPED_NATIVE_TOKEN()` 不是拿同一个文件自证，而是**从链上 Router 现算**后再比对——dex 重部署后只换了地址文件却忘了重部署 zap 的情况在这里暴露。 |
@@ -201,7 +201,6 @@ printf 'BATCH_TRANSFER_ADDRESS=\n' > script/network/bsc97_dev/addresses.batch-tr
 - 地址是合法的非零 20 字节地址（`0x` + 40 位十六进制）
 - `cast chain-id` 与 `network.params` 的 `CHAIN_ID` 一致
 - `cast code` 非空（合约确实部署在该地址）
-- `NATIVE_TRANSFER_GAS_LIMIT()` 等于 `50000`
 
 部署后若改过 `src/BatchTransfer.sol` 里的这个常量，校验会失败——这是预期结果（链上代码与工作区源码不符），不是部署缺陷。
 

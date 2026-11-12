@@ -20,43 +20,31 @@
 ## 当前状态
 
 - 仓库骨架与工具链已建立，编译基线为 Solidity `0.8.37`、Foundry `1.8.1`、`evm_version = "osaka"`，不使用 `via_ir`。
-- `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，之后追加一个规范整改提交。27 个用例全通过（24 个合约用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,495 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
-- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**两个步骤均已完成**：合约、接口与四个最小外部接口落地；`error` 按 `error-standards.md` 拆分为一条件一错误；mock 补齐到真实 constant-product 数学与协议费分支；移植 43 个源用例并补足新增错误的可达路径，共 62 个用例（含 2 个 fuzz）全通过；部署脚本、地址参数文件与部署回归测试落地。运行时字节码 9,528 字节（EIP-170 上限 24,576）。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
+- `BatchTransfer` 已完成旧代码基线、重命名、BSC 实现、单元测试四个提交，之后追加一个规范整改提交。30 个用例全通过（27 个合约用例 + 3 个部署脚本 `_validateConfig` 用例），运行时字节码 3,532 字节（EIP-170 上限 24,576）。部署脚本、地址参数文件与部署回归测试均已落地，CI 的五个门禁步骤全部启用。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
+- `UniswapV2Zap` 迁移自 `LOVE20TKM/periphery`，**两个步骤均已完成**：合约、接口与四个最小外部接口落地；`error` 按 `error-standards.md` 拆分为一条件一错误；mock 补齐到真实 constant-product 数学与协议费分支；移植 43 个源用例并补足新增错误的可达路径，共 79 个用例（67 个合约用例含 2 个 fuzz，12 个部署脚本不变量用例）全通过；部署脚本、地址参数文件与部署回归测试落地。运行时字节码 10,016 字节（EIP-170 上限 24,576）。部署入口见 [`script/deploy/README.md`](script/deploy/README.md)。
 
 ## 与旧仓的差异
 
-`BatchTransfer` 迁移自 `LOVE20TKM/batch-transfer@5bc194c`。**这不是纯搬运**：`migration-standards.md` 第二节把「旧代码基线」只当作 diff 起点，第三、四步（BSC 实现、单元测试）才是真正的改造；该文件第三节也写明「不应只因"旧代码如此"就照搬」。因此本仓在迁移的同时按 `error-standards.md` 与 `event-standards.md` 整改了 ABI。
+两个合约都迁移自 `LOVE20TKM`（`batch-transfer@5bc194c`、`periphery`）。**这不是纯搬运**：`migration-standards.md` 第二节把「旧代码基线」只当作 diff 起点，第三、四步（BSC 实现、单元测试）才是真正的改造；该文件第三节也写明「不应只因"旧代码如此"就照搬」。因此在迁移的同时按 `error-standards.md` 与 `event-standards.md` 整改了 ABI，并在评审后按使用方的反馈改了几处行为。
 
-### ABI 变更清单
-
-两仓的 ABI **不同**，逐项如下。本节不登记 ABI 哈希：哈希每次改名都会变，钉在文档里只会变成过期数字（它已经过期过两次）。需要精确对账时直接用工具比：
+本节不登记 ABI 哈希：哈希每次改名都会变，钉在文档里只会变成过期数字（它已经过期过两次）。需要精确对账时现场比：
 
 ```sh
-# 本仓
-forge inspect UniswapV2Zap abi --json | python3 -c 'import json,sys,hashlib;print(hashlib.sha256(json.dumps(json.load(sys.stdin),sort_keys=True).encode()).hexdigest())'
-# 旧仓
-git -C ../LOVE20TKM/periphery show <commit>:out/UniswapV2Zap.sol/UniswapV2Zap.json > /tmp/old.json
-python3 -c 'import json,hashlib;print(hashlib.sha256(json.dumps(json.load(open("/tmp/old.json"))["abi"],sort_keys=True).encode()).hexdigest())'
+forge inspect <Contract> abi --json     # 本仓
+git -C ../LOVE20TKM/periphery show <commit>:out/<Contract>.sol/<Contract>.json   # 旧仓
 ```
 
+### BatchTransfer 的变更
 
-**函数：5 个，选择器全部未变；其中 2 个的参数名改了。**
+**函数：两个入口都新增了 `uint256 gasLimit`，并删除了常量 `NATIVE_TRANSFER_GAS_LIMIT()`。**
 
-| 函数 | 参数名变化 |
-| --- | --- |
-| `zapNativeToken` | `token` → `tokenAddress` |
-| `quoteZapNativeToken` | `token` → `tokenAddress` |
-
-参数名不进选择器，但它是 ABI JSON 的 `name` 字段，属于集成方看到的 API（`naming-standards` §十：`address` 类型的实体参数带 `Address` 后缀）。`zapToken` 的入参是 `ZapTokenParams` 结构体，其字段名未变。
-
-**此外新增 2 个继承错误，旧仓 ABI 里没有**（OpenZeppelin v4→v5 的连带结果，本合约并未自己声明它们）：
-
-| 错误 | 选择器 | 来源 |
+| 旧仓 | 本仓 | 原因 |
 | --- | --- | --- |
-| `ReentrancyGuardReentrantCall()` | `0x3ee5aeb5` | OZ v5 `ReentrancyGuard` 用自定义错误替代了 v4 的 `Error(string)`（`"ReentrancyGuard: reentrant call"`） |
-| `SafeERC20FailedOperation(address)` | `0x5274afe7` | OZ v5 `SafeERC20` 用带 token 地址的自定义错误替代了 v4 的 `Error(string)` |
+| `batchTransferNative(address[],uint256[])` | `batchTransferNative(address[],uint256[],uint256)` | 每笔转发的 gas 预算从写死的常量改为调用方入参：常量对多签、带 hook 的收款合约过窄，它们需要远超 50,000 gas，而由调用方给值时付 gas 的一方也能自己权衡 |
+| `batchTransferERC20(address,address[],uint256[])` | `batchTransferERC20(address,address[],uint256[],uint256)` | 同上，约束的是每笔 `transferFrom` |
+| `NATIVE_TRANSFER_GAS_LIMIT()`（getter） | 删除 | 常量已不存在；`gasLimit == 0` 改由新错误 `ZeroGasLimit()` 拒绝 |
 
-**前端按 selector 做错误映射时必须补上这两个**，否则 Zap 的重入保护与三处 ERC20 失败路径（`forceApprove`、`safeTransfer`、`safeTransferFrom`）会落到「未知错误」。旧仓这两个条件抛出的是 `Error(string)`（`0x08c379a0`），映射方式本来也不同。
+函数选择器因此全部改变，集成方必须按新签名调用。
 
 **事件：2 个，全部改名**（topic0 随之改变）。
 
@@ -67,15 +55,9 @@ python3 -c 'import json,hashlib;print(hashlib.sha256(json.dumps(json.load(open("
 
 依据：`dev-standards.md` §5.1 要求事件名用过去式。字段名 `token` 同时改为 `tokenAddress`（`event-standards.md` §6.4），只改字段名不改变类型序列，对 topic0 无额外影响。
 
-**函数参数名：`token` → `tokenAddress`（2 个入口）。** 参数名不进 selector，5 个函数的选择器全部不变；但参数名是 ABI JSON 的 `name` 字段，属于集成方 API（`naming-standards.md` §十：「`address` 类型的实体参数/字段必须带 `Address` 后缀」，§十一：参数名 = 结构体字段名 = 事件字段名，四处同源）。因此 `batchTransferERC20` 与 `erc20Balances` 的入参同步改名——**改的是参数名，不是函数名**，因为函数名进 selector 而参数名不进。
+**函数参数名：`token` → `tokenAddress`（2 个入口）。** 参数名不进 selector，但它是 ABI JSON 的 `name` 字段，属于集成方 API（`naming-standards.md` §十：`address` 类型的实体参数带 `Address` 后缀）。`batchTransferERC20` 与 `erc20Balances` 的入参同步改名——改的是参数名，不是函数名。
 
-**错误：13 个，其中 5 个未变、8 个改变。**
-
-未变（选择器与旧仓相同）：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`。
-
-只改载荷命名（选择器不变，参数名属于 ABI JSON 的 `name` 字段）：`ERC20InsufficientBalance` 与 `ERC20InsufficientAllowance` 的载荷由 `(…, balance, required)` / `(…, allowanceAmount, required)` 改为 `(…, required, available)`。依据 `error-standards.md` §4：「额度：`required + available`」。这两个错误名与 OpenZeppelin `IERC20Errors` 的标准错误同名但选择器不同（本合约 `0xac083e30` / `0x9cb4340e`，OZ 标准 `0xe450d38c` / `0xfb8f41b2`），**链下按选择器识别，不要按错误名字符串识别**——`error-standards.md` 第一节明确「链下按 selector 识别，不按参数名识别」。本合约是这两个错误的产生者，不是透传者，本地声明合规。
-
-改变：
+**错误：13 → 14 个。** 未变（选择器与旧仓相同）：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`。新增 `ZeroGasLimit()`。其余 6 个改变：
 
 | 旧仓 | 本仓 | 依据 |
 | --- | --- | --- |
@@ -88,50 +70,81 @@ python3 -c 'import json,hashlib;print(hashlib.sha256(json.dumps(json.load(open("
 
 原 `bytes` 载荷改为 `bytes32` 哈希 + `uint256` 长度（`error-standards.md` 第七节给出的有界形态），排障时仍可按内容哈希核对，但 revert data 长度不再随外部返回数据膨胀。
 
+### UniswapV2Zap 的变更
+
+**函数：`zapNativeToken` 新增 `bool refundAsNative`，两个入口的参数名 `token` → `tokenAddress`。**
+
+| 函数 | 变化 |
+| --- | --- |
+| `zapNativeToken` | `token` → `tokenAddress`；**新增 `bool refundAsNative`**，选择器改变 |
+| `quoteZapNativeToken` | `token` → `tokenAddress`，选择器不变 |
+| `zapToken` / `quoteZapToken` | 未变（入参是 `ZapTokenParams` 结构体） |
+
+`refundAsNative` 存在的原因：退款原本一律解包成原生币发给 `msg.sender`，而最优解常留下 0～1 wei；没有 `receive()` 的合约调用方（多签、聚合器、AA 钱包）因此几乎每次 zap 都会回滚。现在调用方选择退成原生币还是 wrapped native。
+
+**行为变更（不改 ABI）：内部兑换的 `amountOutMin` 从 `1` 改为按 `_getAmountOut` 推出的下界。**
+
+旧实现把 `swapExactTokensForTokens(..., 1, ...)` 的滑点保护完全外包给调用方的 `amountAMin`/`amountBMin`/`liquidityMin`。现在用交换前储备算出应收量、扣掉 1%（`SWAP_SLIPPAGE_TOLERANCE_BPS = 100`）作为下界。同笔交易内储备不会变，所以正常路径仍应通过；三明治则会在这条腿上被拒。
+
+**事件：2 个，全部改名**（topic0 随之改变）。
+
+| 旧仓 | 本仓 |
+| --- | --- |
+| `ZapToken(address indexed account, address indexed tokenA, address indexed tokenB, address to, uint256 amountA, uint256 amountB, uint256 liquidity)` | `TokenZapped(address indexed sender, address indexed tokenA, address indexed tokenB, address to, uint256 amountA, uint256 amountB, uint256 liquidity)` |
+| `ZapNativeToken(address indexed account, address indexed token, address to, …)` | `NativeTokenZapped(address indexed sender, address indexed tokenAddress, address to, …)` |
+
+`account` → `sender`（`event-standards.md` §6.4 角色词表）；`token` → `tokenAddress`。
+
+**错误：17 → 22 个。** 其中 2 个是 OpenZeppelin v5 继承来的，旧仓 ABI 里没有——**前端按 selector 做错误映射时必须补上**，否则重入保护与三处 ERC20 失败路径会落到「未知错误」：
+
+| 错误 | 选择器 | 来源 |
+| --- | --- | --- |
+| `ReentrancyGuardReentrantCall()` | `0x3ee5aeb5` | OZ v5 用自定义错误替代了 v4 的 `Error(string)`（`"ReentrancyGuard: reentrant call"`） |
+| `SafeERC20FailedOperation(address)` | `0x5274afe7` | OZ v5 用带 token 地址的自定义错误替代了 v4 的 `Error(string)` |
+
+其余改变的见下表：
+
+| 旧仓 | 本仓 | 依据 |
+| --- | --- | --- |
+| `InsufficientLiquidityMinted()`（一处 selector 承载 5 类条件） | `SlippageExceeded(uint256 actual, uint256 minAmount)` / `InsufficientInitialLiquidity()` / `SwapOutputZero()` / `OptimalAmountZero()` / `LiquidityMintedZero()` | `error-standards.md` §2 一条件一错误；载荷按 §4 |
+| `AmountTooLarge()` | `AmountExceeded(uint256 amount, uint256 maxAmount)` | §3 数值上限用 `<Subject>Exceeded`，§4 载荷为 `actual + limit` |
+| `InvalidRatio()` | **删除** | §八「不保留不可达错误」；两处调用点都用与守卫相同的比较选好了方向，守卫恒为假 |
+| `ZeroTo()` | `ZeroRecipientAddress()` | 旧名不是 `Zero<Field>` 形态 |
+| `WrappedNativeToken()` | `WrappedNativeTokenNotAccepted()` | 旧名是名词短语，不是失败状态 |
+| `ZeroAmount()` | `ZeroInputAmounts()` | 与 `BatchTransfer` 的 `ZeroAmount(uint256)` 同名不同签名；Zap 的条件是「两个输入都是零」（AND），与批量转账的「第 i 项为零」不是同一个失败 |
+| `NativeTransferFailed()` | `NativeRefundFailed()` | 同上；Zap 只在退多余原生币一处使用 |
+
 ### 逻辑语义未变的依据
 
-ABI 变了，所以不能再用「ABI 一致」证明行为未变——**这一节不再把 ABI 一致性当作「无逻辑变更」的证据**。现在的依据是：**23 个迁移测试用例逐条保留、断言强度未降、全部通过**，另加 1 个新增用例覆盖空返回数据边界（共 24 个合约用例 + 3 个部署脚本用例）。
+ABI 变了，所以不能再用「ABI 一致」证明行为未变。现在的依据是**迁移时的 23 个用例逐条保留、断言强度未降、全部通过**，加上整改与评审后新增的用例（合计 BatchTransfer 27 + 3、UniswapV2Zap 67 + 12，另 49 项部署脚本回归）。
 
 按变更性质分三类：
 
-- **纯格式**（不影响 ABI、不影响字节码语义）：`emit` 改具名参数（kv）形式；多参数 `error` 声明拆行；`IERC20Minimal` 从实现文件抽到 `src/interfaces/`。这三项由 `dev-standards.md` §5.1 与 §4.1 要求。
-- **签名变更**（改变 ABI，不改变行为）：5 个 error 的 `bytes` 载荷改为 `bytes32` + `uint256`；`InvalidToken` → `TokenNotContract`；2 个事件改名；事件与 error 的字段/参数 `token` → `tokenAddress`。这些是**公开 ABI 的形态变化**，函数选择器与调用语义一个都没动。
-- **实现变更**（为支撑签名变更）：新增私有 `_errorFingerprint(bytes memory) → (bytes32, uint256)`，在 5 个 revert 站点集中做 `keccak256(data)` + `data.length`。行为差异只有一处且是新增能力：错误不再携带无界数据。
+- **纯格式**（不影响 ABI 语义）：`emit` 改具名参数形式；多参数 `error` 声明拆行；`IERC20Minimal` 从实现文件抽到 `src/interfaces/`。
+- **签名变更**（改变 ABI，不改变行为）：错误载荷与控制流不变的重命名、事件改名、字段与参数改名。
+- **行为变更**（本轮评审后新增，明确记录）：`gasLimit` 从常量变入参；`refundAsNative` 开关；兑换腿滑点下界从 `1` 改为按预估量计算的 1% 下界。这三项都有对应测试，且都在上一节列明。
 
-**断言强度为什么没降**：原来断言的是 revert data 里的完整 `bytes`（`abi.encode(false)`、`hex"01"`、`Error(string)` 编码等），现在断言的是同一段数据的 `keccak256` 与长度——内容仍然被逐字节锁住（哈希碰撞在这些固定短输入上不是现实风险），且**新增**了原来没有的长度断言。事件侧 `expectEmit` 的 `checkTopic1/2/3` 与 data 比对保持不变，只改了字段名。
+**断言强度为什么没降**：原来断言 revert data 里的完整 `bytes`，现在断言同一段数据的 `keccak256` 与长度——内容仍被锁住（哈希碰撞在这些固定短输入上不是现实风险），且**新增**了原来没有的长度断言。事件侧 `expectEmit` 的 topic 与 data 比对保持不变。
 
-**新增用例**：`testRevertsOnEmptyBalanceQueryReturn`。原来没有覆盖「外部调用成功但返回 0 字节」这条路径——旧实现里 `data.length == 0` 会让 `keccak256(bytes(""))` 成为有效哈希、`errorLength = 0`，这是新载荷形态下一个必须钉住的边界。
+## 编译基线
 
-## 编译基线差异
+本仓的编译基线是 Solidity `0.8.37`、`evm_version = "osaka"`、`cbor_metadata = false`。旧仓 `batch-transfer@5bc194c` 是 Solidity `0.8.17`，`foundry.toml` 未设 `evm_version`。
 
-本仓的编译基线是 Solidity `0.8.37`、`evm_version = "osaka"`、`cbor_metadata = false`。旧仓基线是 Solidity `0.8.17`，`foundry.toml` 未设置 `evm_version`，`cbor_metadata` 则本来就写了 `false`。
+三点与本仓不同，都不改变逻辑：
 
-| 项目 | 旧仓 `batch-transfer@5bc194c` | 本仓 |
-| --- | --- | --- |
-| `solc_version` | `0.8.17` | `0.8.37` |
-| `evm_version` | 未设置，Foundry 对 0.8.17 解析为 `london`（无 `PUSH0`） | `osaka`（启用 `PUSH0`） |
-| `cbor_metadata` | `false`，但对 0.8.17 是空操作（见下） | `false`（真正剥离 metadata 尾） |
-| runtime 字节码 | 3,678 字节（末尾含 12 字节 metadata 尾） | 3,495 字节（无 metadata 尾） |
-| 去掉 metadata 尾后的 runtime | 3,666 字节 | 3,495 字节（本来就无尾） |
+- **`evm_version`**：旧仓未设，Foundry 对 `0.8.17` 解析为 `london` 而非 `paris`（`paris` 要到 solc `0.8.18` 才支持，指定即报错）。`london` 不产出 `PUSH0`，`osaka` 产出，因此字节码不同。
+- **编译器版本**：`0.8.17` 与 `0.8.37` 的代码生成本身就有差异。
+- **metadata 尾**：旧仓 `foundry.toml` 也写了 `cbor_metadata = false`，但对 `0.8.17` 是**空操作**——`appendCBOR` 是 solc `0.8.18` 才加入的设置，Foundry 传不下去，所以旧仓 runtime 末尾仍有 12 字节的 `a164736f6c6343000811000a`（CBOR 编码的 `{"solc":"0.8.17"}`）。本仓的 `false` 真正剥离了这段。
 
-实测口径：旧仓 runtime 的末 12 字节是 `a164736f6c6343000811000a`，按 CBOR 解码为 `{"solc": "0.8.17"}` 的 compact 编码，结构是 `a1`（1 项 map）+ `64`（4 字节文本）+ `"solc"` + `43`（3 字节 byte string）+ `000811`（= 0.8.17）+ `000a`（其后 10 字节 metadata）；共 **12 字节**。3,678 − 12 = 3,666。本仓 runtime 末尾没有这段，直接就是 3,495。
+**本节的数字只用于说明编译基线，不能用来判断行为是否一致。** 本仓的 ABI 与旧仓不同（见上一节），源码也不同，runtime 字节码本来就不该相等；行为是否未变的依据是迁移测试逐条保留并通过（见上一节）。需要具体数值时现场比：
 
-**这组数字不能用来证明"没有逻辑变更"。** 本仓整改了 ABI（见上一节），源码不同，runtime 本来就不该一致；3,474 是**整改前**（`072d30c` 工作树）的字节数，整改后是 3,495，多出的 21 字节就是有界错误载荷与改名带来的。下表只用于说明「在同一份源码上，编译基线本身会造成多大的字节码差」。
+```sh
+forge build --sizes                              # 本仓各合约 runtime / initcode
+forge inspect BatchTransfer deployedBytecode     # 本仓 runtime 字节码
+git -C ../LOVE20TKM/periphery show 5bc194c:out/UniswapV2Zap.sol/UniswapV2Zap.json
+```
 
-下表按**整改前的源码**（runtime 3,474）测量，因为只有那一版与旧仓源码等价，差值才有意义：
-
-- **`evm_version`（116 字节）**：`osaka` 启用 `PUSH0`，`london` 不产出该指令。实测：同一份源码把 `evm_version` 改回 `london` 重编译，runtime 3,590 字节，3,590 − 3,474 = 116。
-- **编译器版本（76 字节）**：`0.8.17` 与 `0.8.37` 的代码生成不同。3,666 − 3,590 = 76。
-
-116 + 76 = 192，因此分解自洽：204（3,678 − 3,474 总量差）= 12（metadata 尾）+ 116（evm_version）+ 76（编译器版本）。
-
-对**整改后**的源码做同一测量：`osaka` 为 3,495，`london` 为 3,597，两者相差 102 字节——`PUSH0` 的节省量随代码形状浮动，不是固定 116，所以上面那个 116 只对整改前的那版源码成立，不要外推。
-
-**注意不要把这 12 字节当成"剥 metadata 的收益"**：这里的 12 是旧仓产物末尾那段的实际长度，不是"本仓剥离 metadata 让字节码少了 12 字节"。旧仓之所以留着这段，是因为 solc `0.8.17` 不支持 `appendCBOR` 设置（该选项 `0.8.18` 才加入），Foundry 传不下去，`cbor_metadata = false` 对它是空操作；而剥离 metadata 后 solc 会重新布局代码，差值未必正好等于尾段长度，所以本仓只陈述实测值，不推断"关掉 metadata 省了多少"。
-
-注：旧仓 `evm_version` 未设置时，Foundry 对 `0.8.17` 解析为 `london` 而非 `paris`——`paris` 这个 EVM 版本要到 solc `0.8.18` 才支持，`0.8.17` 指定它会直接编译报错。`london` 与 `paris` 都不产出 `PUSH0`，所以"旧仓没有 `PUSH0`"这个结论不变。
-
-上面这组字节数只用于说明**编译基线**带来的差异。由于本仓同时整改了 ABI（见上一节），两仓 runtime 字节码本来就不该一致——核对行为时以测试为准，不要直接比对字节码。
+**目标链的指令集**：`evm_version = "osaka"` 让两个合约用上 `PUSH0`（Shanghai）与 `MCOPY`（Cancun）。BSC 主网（chain 56）已分别于 **2024-01-23** 与 **2024-06-20** 激活 Shanghai 与 Cancun，并于 **2026-04-28** 激活 Osaka；Chapel 测试网（97）更早（2023-12-19 / 2024-04-17 / 2026-03-24）。依据是 BSC 客户端自带的链配置 `bnb-chain/bsc/params/config.go` 中的 `BSCChainConfig` / `ChapelChainConfig`。实测：把链跑在 `paris` 上，本合约连部署都会失败（`EVM error NotActivated`），所以这个依赖是硬的；BSC 三个分叉均已就绪。
 
 ## 构建与测试
 
@@ -192,7 +205,7 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 
 **做什么**。一个无状态的批量转账与批量查询工具，四个入口：
 
-- `batchTransferNative(address[] recipients, uint256[] amounts)` —— 按 `amounts` 逐笔转原生币，要求 `msg.value` 等于 `amounts` 之和；每笔固定转发 `NATIVE_TRANSFER_GAS_LIMIT`（50,000）gas，避免单个收款方吞掉整笔预算。
+- `batchTransferNative(address[] recipients, uint256[] amounts, uint256 gasLimit)` —— 按 `amounts` 逐笔转原生币，要求 `msg.value` 等于 `amounts` 之和；每笔转发 `gasLimit` gas。`gasLimit` 由调用方决定而不是写死：常量对多签、带 hook 的收款合约过窄（它们需要远超 50,000），而由调用方给值时付 gas 的一方也能自己权衡批量大小。EIP-150 仍会把实际转发量压到剩余 gas 的 63/64；带 `value` 的调用另有 2,300 gas stipend。`gasLimit == 0` 被拒绝（`ZeroGasLimit`）。
 - `batchTransferERC20(address tokenAddress, address[] recipients, uint256[] amounts)` —— 先校验 `tokenAddress` 有代码，再一次性核对发送方余额与对本合约的授权额度，通过后才逐笔 `transferFrom`。
 - `nativeBalances(address[] accounts)` / `erc20Balances(address tokenAddress, address[] accounts)` —— 批量读余额，同样先校验 `tokenAddress` 有代码。
 
@@ -217,7 +230,7 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 **做什么**。一个 Uniswap V2 加池工具，四个入口（除了重入锁，合约没有业务状态）：
 
 - `zapToken(ZapTokenParams params)` —— 把 `tokenA`/`tokenB` 两种代币加入它们的 V2 池并铸造 LP。单边输入时先把超出比例的那一侧换成另一侧，再把两侧一起加进池子；两边都给时按池子当前比例取用，多出来的原路退回。`ZapTokenParams` 里的 `amountAMin`/`amountBMin`/`liquidityMin` 是三条独立的滑点底线，`to` 是 LP 的接收方。
-- `zapNativeToken(address tokenAddress, uint256 amountTokenIn, uint256 amountTokenMin, uint256 amountNativeMin, uint256 liquidityMin, address to, uint256 deadline)` —— 同一件事，但一侧是原生币。`msg.value` 换成 wrapped native 后与 `tokenAddress` 组成池子；单边输入时同样先换再池。
+- `zapNativeToken(address tokenAddress, uint256 amountTokenIn, uint256 amountTokenMin, uint256 amountNativeMin, uint256 liquidityMin, address to, bool refundAsNative, uint256 deadline)` —— 同一件事，但一侧是原生币。`msg.value` 换成 wrapped native 后与 `tokenAddress` 组成池子；单边输入时同样先换再池。`refundAsNative` 决定多余部分退成原生币还是 wrapped native：没有 `receive()` 的合约调用方必须传 `false`，否则只要留下 1 wei 就会因退款失败而整笔回滚（这正是最常见的集成形态）。
 - `quoteZapToken(address tokenA, address tokenB, uint256 amountAIn, uint256 amountBIn)` —— 只读预测：返回将会被使用的两侧数量、内部兑换量、预计铸得的 LP，以及加池后的储备。预测与实际执行逐 wei 一致（有 fuzz 用例钉住）。
 - `quoteZapNativeToken(address tokenAddress, uint256 amountTokenIn, uint256 amountNativeIn)` —— 原生币版本的预测，字段名换成 `amountTokenUsed`/`amountNativeUsed`。
 
@@ -268,3 +281,15 @@ Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，�
 1. `ZeroTokenA()` / `ZeroTokenB()` —— 把参数位置编进了名字，不是 `Zero<Field>` 形态。建议合并为 `ZeroTokenAddress(uint256 index)`，或保持现状（两个错误各自只判一个位置，读起来更直接）。
 2. `InsufficientLiquidity()` —— 缺口语义符合 `Insufficient*`，但无载荷；它与 `InsufficientInitialLiquidity()` 不重复（前者是池子储备为零、公式无解，后者是新池输入太小、铸不出 MINIMUM_LIQUIDITY）。该条件下没有任何可用数值（储备就是 0），按 §4「没有行动价值时省略载荷」保持无载荷成立。
 3. `NativeRefundFailed()` —— `*Failed` 句式符合 §3；载荷按 §4「没有行动价值时省略载荷」可以不加（失败方是 `to`，调用方自己知道），保持无载荷。
+
+## 已知限制
+
+写在这里是为了让集成方按正确的方式使用，而不是靠读源码自己发现。
+
+- **只支持标准 ERC20。** fee-on-transfer（转账扣费）与 rebasing（余额自动缩放）代币不支持：`zapToken` 与 `zapNativeToken` 按**名义**数量授权与使用代币，实际到账若少于名义值，差额会由合约里既有的余额补上（那部分本属他人或此前误转）。标准 ERC20 下花费恒不超过转入量，因此不成立。`BatchTransfer` 同理：它按 `amounts` 逐笔 `transferFrom`，不做到账量校验。
+- **兑换腿的滑点下界是本仓给的，不是调用方给的。** `_swapExcess` 用 `_getAmountOut` 按交换前储备算出的应收量扣掉 1% 作为 `amountOutMin`。同笔交易内储备不会变，所以正常情况下这个下界只是防三明治；真正的价格保护仍是调用方传入的 `amountAMin` / `amountBMin` / `liquidityMin`。
+- **退款形式由调用方选择**（`refundAsNative`）。合约调用方传 `false`，否则没有 `receive()` 的合约会因为 1 wei 的 wrapped native 退款失败而整笔回滚。
+- **`gasLimit` 是调用方的责任。** 给得太低会让整批回滚（有意如此：一笔失败即整批回滚），给得太高则失去「单个收款方吞掉预算」的保护。EIP-150 仍会把实际转发量压到剩余 gas 的 63/64。
+- **批量大小没有上限。** 这是调用方付 gas 的设计，不是遗漏；但 batch 越大，单笔交易越可能触及区块 gas 上限。
+- **强制转入的资产无法取回。** `BatchTransfer` 没有 `receive`/`sweep`，`UniswapV2Zap` 也没有恢复入口。用 `selfdestruct` 打进的原生币、或被 ERC20 记到合约地址名下的余额，会永久留在那里。转入者自负。
+- **Zap 的 `to` 允许等于合约自身**，LP 会铸给 Zap 且无 rescue 路径，等同于永久锁定。集成方不要这么做（本仓不额外拦截，因为允许自持 LP 在组合场景里可能是有意的）。
