@@ -11,8 +11,8 @@ contract BatchTransfer is IBatchTransfer {
         override
         returns (uint256 totalAmount)
     {
-        // Scalar argument checks come first in both entry points, so the order errors surface in does
-        // not depend on which variant the caller used.
+        // Gas budget before the batch contents: `gasLimit` is a scalar, and checking it first keeps the
+        // cheap argument error from being masked by an array-shape error on the same call.
         _checkGasLimit(gasLimit);
         totalAmount = _checkTransferBatch(recipients, amounts);
         if (msg.value != totalAmount) {

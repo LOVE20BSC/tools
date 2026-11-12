@@ -122,9 +122,36 @@ else
     echo "✓ BatchTransfer deployed"
 fi
 
-# The contract exposes no deployment-time constants: the per-recipient gas budget is a call argument
-# now, so there is nothing to read back. Deployment identity is covered by the code-presence check
-# above; behaviour is covered by the test suite.
+# Nothing is readable from the contract itself: the per-recipient gas budget is a call argument now, so
+# there is no deployment-time constant to read back. Code presence alone would accept any contract, so
+# compare the deployed code hash against the runtime the local build produces. That is what makes this
+# step an identity check rather than a liveness check: an old build, an unrelated contract or a
+# corrupted deployment all fail here. Requires the local artifacts, which the deploy step builds.
+EXPECTED_CODE_HASH=$(python3 - "$TOOLS_ROOT" <<'PY'
+import json, sys
+from pathlib import Path
+artifact = Path(sys.argv[1]) / "out/BatchTransfer.sol/BatchTransfer.json"
+try:
+    print(json.load(artifact.open())["deployedBytecode"]["object"])
+except (OSError, KeyError):
+    print("")
+PY
+)
+
+if [ "$FAILED" -eq 0 ]; then
+    if [ -z "$EXPECTED_CODE_HASH" ]; then
+        echo "✗ local artifact missing: run 'forge build' first"
+        FAILED=$((FAILED + 1))
+    elif [ "$(printf '%s' "$EXPECTED_CODE_HASH" | tr '[:upper:]' '[:lower:]')" \
+        != "$(printf '%s' "$batch_transfer_code" | tr '[:upper:]' '[:lower:]')" ]; then
+        echo "✗ deployed code does not match the local build"
+        echo "    deployed: ${batch_transfer_code:0:64}..."
+        echo "    expected: ${EXPECTED_CODE_HASH:0:64}..."
+        FAILED=$((FAILED + 1))
+    else
+        echo "✓ code matches the local build"
+    fi
+fi
 if [ "$FAILED" -ne 0 ]; then
     echo "✗ $FAILED verification(s) failed"
     exit 1

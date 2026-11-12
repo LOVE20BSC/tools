@@ -1054,11 +1054,16 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
     function testZapNativeTokenSucceedsForContractCallerWhenRefundIsWrapped() public {
         RejectNativeZapCaller caller = new RejectNativeZapCaller(zap);
 
-        caller.zapNativeToken{value: 10 ether}(address(tokenA), address(caller), false, block.timestamp + 1);
+        caller.zapNativeToken{value: 10 ether + 1}(address(tokenA), address(caller), false, block.timestamp + 1);
 
-        // The LP goes to the caller, and any wrapped-native dust stayed with the caller as WETH.
+        // The LP goes to the caller; the refund must arrive as WETH (not native) and the zap must keep
+        // nothing. A value with a trailing wei leaves dust, so the refund path is actually exercised
+        // rather than skipped by a balance that happened to be exact.
         assertGt(pairNativeA.balanceOf(address(caller)), 0, "caller received LP");
         assertEq(address(caller).balance, 0, "caller received no native token");
+        assertEq(IERC20(address(weth)).balanceOf(address(zap)), 0, "zap kept no wrapped native");
+        assertEq(address(zap).balance, 0, "zap kept no native token");
+        assertGt(IERC20(address(weth)).balanceOf(address(caller)), 0, "the wrapped refund reached the caller");
     }
 
     function testPairNotFoundSingleTokenReverts() public {
@@ -1342,29 +1347,40 @@ contract UniswapV2ZapTest is Test, IUniswapV2ZapEvents {
     /// candidate swap amount it applies the real `getAmountOut` and the pair's real optimal-liquidity
     /// math, then requires the contract's choice to be at the maximum. A wrong closed form would show up
     /// as a candidate with strictly more liquidity.
-    function testFormulaSwapAmountIsOptimalAmongAllCandidates() public view {
-        // A deliberately small pool so a bounded scan is affordable, and inputs that genuinely need a
-        // swap. The scan samples the feasible range, then refines inside the winning bracket; the
-        // assertion is that no sampled candidate beats the contract's choice.
-        uint256 reserveIn = 1_000 ether;
-        uint256 reserveOut = 1_000 ether;
-        uint256 amountIn = 300 ether;
-        uint256 amountOutAlready = 10 ether;
+    /// @dev Independent optimality check for the swap amount the **contract** picks.
+    ///
+    /// The two "formula precision" tests compare the contract against `_formulaSwapAmount`, a
+    /// transcription of the same closed form — that catches transcription drift but says nothing about
+    /// whether the closed form is right, and it never exercises the contract. This asks the contract for
+    /// its quote (`ZapQuote.amountToSwap`), then searches other swap amounts using the mock's real
+    /// `getAmountOut` and the pair's real optimal-amount math. The contract's choice must not be beaten.
+    /// A wrong closed form shows up as a candidate with strictly more liquidity.
+    function testContractSwapAmountIsOptimalAmongAllCandidates() public {
+        // Skew the seeded 1:1 pair so the zap genuinely has to swap, and pick inputs that leave excess
+        // on side A.
+        _moveTokenPairPriceWithAIn(500 ether);
 
-        uint256 chosen = _formulaSwapAmount(reserveIn, reserveOut, amountIn, amountOutAlready);
+        uint256 amountAIn = 100 ether;
+        uint256 amountBIn = 1 ether;
+        ZapQuote memory quote = zap.quoteZapToken(address(tokenA), address(tokenB), amountAIn, amountBIn);
+        assertTrue(quote.willSwap, "the scenario must actually swap");
+        uint256 chosen = quote.amountToSwap;
 
-        (uint256 best, uint256 bestLiquidity) = _bestSwapAmountOver(
-            reserveIn, reserveOut, amountIn, amountOutAlready, 0, amountIn, 200
-        );
-        uint256 bracket = amountIn / 200;
+        (uint256 reserveA, uint256 reserveB) = _reserves(address(tokenA), address(tokenB));
+        // Side A is the excess side here, so reserveIn = reserveA in the swap the zap performs.
+        assertGe(amountAIn * reserveB, reserveA * amountBIn, "direction precondition");
+
+        (uint256 best, uint256 bestLiquidity) =
+            _bestSwapAmountOver(reserveA, reserveB, amountAIn, amountBIn, 0, amountAIn, 200);
+        uint256 bracket = amountAIn / 200;
         uint256 lo = best > bracket ? best - bracket : 0;
-        uint256 hi = best + bracket < amountIn ? best + bracket : amountIn;
-        (best, bestLiquidity) = _bestSwapAmountOver(reserveIn, reserveOut, amountIn, amountOutAlready, lo, hi, 200);
+        uint256 hi = best + bracket < amountAIn ? best + bracket : amountAIn;
+        (best, bestLiquidity) = _bestSwapAmountOver(reserveA, reserveB, amountAIn, amountBIn, lo, hi, 200);
 
-        uint256 chosenLiquidity = _liquidityAtSwapAmount(reserveIn, reserveOut, amountIn, amountOutAlready, chosen);
+        uint256 chosenLiquidity = _liquidityAtSwapAmount(reserveA, reserveB, amountAIn, amountBIn, chosen);
 
-        assertGe(chosenLiquidity, bestLiquidity, "the derived swap amount must not be beaten by any sampled candidate");
-        assertLe(chosen > best ? chosen - best : best - chosen, bracket, "derived amount sits far from the sampled optimum");
+        assertGe(chosenLiquidity, bestLiquidity, "the contract's swap amount must not be beaten by any sampled candidate");
+        assertLe(chosen > best ? chosen - best : best - chosen, bracket, "contract's amount sits far from the sampled optimum");
     }
 
     /// @dev Samples `samples + 1` swap amounts across [lo, hi] and returns the one yielding the most

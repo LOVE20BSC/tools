@@ -6,7 +6,7 @@ set -euo pipefail
 # BatchTransfer has no constructor parameters and no init entry, so there is no module parameter to
 # read; batch-transfer.params exists only to keep every module the same shape under
 # script/network/<network>/, and is loaded so a parameter added later needs no new file.
-# Deployment-time static checks (chain ID, code presence, NATIVE_TRANSFER_GAS_LIMIT read-back) happen
+# Deployment-time static checks (chain ID, code presence, code hash against the local build) happen
 # inside DeployBatchTransfer.s.sol; this step only orchestrates files, chain, account and password.
 # Addresses are written to addresses.batch-transfer.params for 21_check_batch_transfer.sh and
 # 31_verify_batch_transfer.sh.

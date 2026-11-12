@@ -57,7 +57,7 @@ git -C ../LOVE20TKM/periphery show <commit>:out/<Contract>.sol/<Contract>.json  
 
 **函数参数名：`token` → `tokenAddress`（2 个入口）。** 参数名不进 selector，但它是 ABI JSON 的 `name` 字段，属于集成方 API（`naming-standards.md` §十：`address` 类型的实体参数带 `Address` 后缀）。`batchTransferERC20` 与 `erc20Balances` 的入参同步改名——改的是参数名，不是函数名。
 
-**错误：13 → 14 个。** 未变（选择器与旧仓相同）：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`。新增 `ZeroGasLimit()`。其余 6 个改变：
+**错误：13 → 14 个。** 未变（选择器与旧仓相同）：`EmptyBatch()`、`ArrayLengthMismatch(uint256,uint256)`、`ZeroRecipient(uint256)`、`ZeroAmount(uint256)`、`NativeValueMismatch(uint256,uint256)`。新增 `ZeroGasLimit()`。其余 8 个改变：
 
 | 旧仓 | 本仓 | 依据 |
 | --- | --- | --- |
@@ -67,6 +67,10 @@ git -C ../LOVE20TKM/periphery show <commit>:out/<Contract>.sol/<Contract>.json  
 | `ERC20TransferFailed(address,uint256,address,uint256,bytes)` | `ERC20TransferFailed(address,uint256,address,uint256,bytes32,uint256)` | 同上 |
 | `ERC20InvalidReturn(address,uint256,address,uint256,bytes)` | `ERC20InvalidReturn(address,uint256,address,uint256,bytes32,uint256)` | 同上 |
 | `InvalidToken(address)` | `TokenNotContract(address)` | `error-standards.md` §3：`Invalid*` 只用于值本身非法，不用于零值或不存在；依赖无代码用 `*NotContract` |
+| `ERC20InsufficientBalance(address,address,uint256,uint256)`（参数 `balance, required`） | `ERC20InsufficientBalance(address,address,uint256,uint256)`（参数 `required, available`） | `error-standards.md` §4：额度类载荷顺序为 `required + available`；选择器不变，只有 ABI JSON 的参数名变 |
+| `ERC20InsufficientAllowance(address,address,address,uint256,uint256)`（参数 `allowanceAmount, required`） | `ERC20InsufficientAllowance(address,address,address,uint256,uint256)`（参数 `required, available`） | 同上 |
+
+这两个名字与 OpenZeppelin `IERC20Errors` 的标准错误**同名但选择器不同**（本合约 `0xac083e30` / `0x9cb4340e`，OZ 标准 `0xe450d38c` / `0xfb8f41b2`）：本合约是它们的产生者而不是透传者，本地声明合规；链下按 selector 识别即可，不要按错误名识别。
 
 原 `bytes` 载荷改为 `bytes32` 哈希 + `uint256` 长度（`error-standards.md` 第七节给出的有界形态），排障时仍可按内容哈希核对，但 revert data 长度不再随外部返回数据膨胀。
 
@@ -84,7 +88,11 @@ git -C ../LOVE20TKM/periphery show <commit>:out/<Contract>.sol/<Contract>.json  
 
 **行为变更（不改 ABI）：内部兑换的 `amountOutMin` 从 `1` 改为按 `_getAmountOut` 推出的下界。**
 
-旧实现把 `swapExactTokensForTokens(..., 1, ...)` 的滑点保护完全外包给调用方的 `amountAMin`/`amountBMin`/`liquidityMin`。现在用交换前储备算出应收量、扣掉 1%（`SWAP_SLIPPAGE_TOLERANCE_BPS = 100`）作为下界。同笔交易内储备不会变，所以正常路径仍应通过；三明治则会在这条腿上被拒。
+旧实现把 `swapExactTokensForTokens(..., 1, ...)` 的滑点保护完全外包给调用方的 `amountAMin`/`amountBMin`/`liquidityMin`。现在用**本函数读到的**储备算出应收量、扣掉 1%（`SWAP_SLIPPAGE_TOLERANCE_BPS = 100`）作为下界。
+
+**这是一致性下界，不是三明治防护。** 它只能挡住「Router 的报价与合约读到的储备不一致」这一类偏差（转账扣费代币、非常规池子、读取之后被改动）。真正的三明治发生在**本函数读储备之前**——攻击者在那之前就把价格推走了，于是下界也跟着被推走的储备一起移动，Router 返回的正是这个下界之上的值，照样放行。同笔交易内合约自身不改池子，所以正常路径上 `expectedOut` 就是精确值（公式与 `UniswapV2Library.getAmountOut` 逐字一致），这个下界不会误伤。
+
+**价格保护仍然、也只能来自调用方传入的 `amountAMin` / `amountBMin` / `liquidityMin`。** 传 0 等于放弃保护，集成方必须传非零值。
 
 **事件：2 个，全部改名**（topic0 随之改变）。
 
@@ -205,8 +213,8 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 
 **做什么**。一个无状态的批量转账与批量查询工具，四个入口：
 
-- `batchTransferNative(address[] recipients, uint256[] amounts, uint256 gasLimit)` —— 按 `amounts` 逐笔转原生币，要求 `msg.value` 等于 `amounts` 之和；每笔转发 `gasLimit` gas。`gasLimit` 由调用方决定而不是写死：常量对多签、带 hook 的收款合约过窄（它们需要远超 50,000），而由调用方给值时付 gas 的一方也能自己权衡批量大小。EIP-150 仍会把实际转发量压到剩余 gas 的 63/64；带 `value` 的调用另有 2,300 gas stipend。`gasLimit == 0` 被拒绝（`ZeroGasLimit`）。
-- `batchTransferERC20(address tokenAddress, address[] recipients, uint256[] amounts)` —— 先校验 `tokenAddress` 有代码，再一次性核对发送方余额与对本合约的授权额度，通过后才逐笔 `transferFrom`。
+- `batchTransferNative(address[] recipients, uint256[] amounts, uint256 gasLimit)` —— 按 `amounts` 逐笔转原生币，要求 `msg.value` 等于 `amounts` 之和；每笔转发请求 `gasLimit` gas（实际是 `min(gasLimit, 剩余 gas 的 63/64)`；带 `value` 的调用另有 2,300 gas stipend）。`gasLimit` 由调用方决定而不是写死：常量对多签、带 hook 的收款合约过窄（它们需要远超 50,000），而由调用方给值时付 gas 的一方也能自己权衡批量大小。EIP-150 仍会把实际转发量压到剩余 gas 的 63/64；带 `value` 的调用另有 2,300 gas stipend。`gasLimit == 0` 被拒绝（`ZeroGasLimit`）。
+- `batchTransferERC20(address tokenAddress, address[] recipients, uint256[] amounts, uint256 gasLimit)` —— 先校验 `tokenAddress` 有代码，再一次性核对发送方余额与对本合约的授权额度，通过后才逐笔 `transferFrom`，每笔 `transferFrom` 受 `gasLimit` 约束。
 - `nativeBalances(address[] accounts)` / `erc20Balances(address tokenAddress, address[] accounts)` —— 批量读余额，同样先校验 `tokenAddress` 有代码。
 
 批量要么全成、要么全回滚：任何一笔失败都会 revert 整笔交易，并带上失败元素的下标（`NativeTransferFailed`、`ERC20TransferFailed`、`ERC20InvalidReturn` 等都带 `index`）。零收款地址与零金额被拒绝，空批次与数组长度不一致被拒绝。ERC20 一侧同时接受标准布尔返回与无返回值的旧式代币：返回 0 字节视为成功（兼容不给返回值的旧币），返回 1～31 字节视为失败，返回 ≥32 字节时只认解码结果为 `1`（源码 `_isSuccessfulERC20Return`）。
@@ -242,7 +250,7 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 
 - **无 owner** —— 没有 owner、admin、operator 或任何特权地址。合约只有 immutable 的 `ROUTER()`/`FACTORY()`/`WRAPPED_NATIVE_TOKEN()` 三个读接口，部署后不存在只有某个地址能调的入口；`testNoAdminFunctions` 逐个断言 `owner()`/`pause()`/`recover(address,uint256)`/`admin()` 都不存在。
 - **无升级** —— 不是代理，没有实现槽、没有 `upgradeTo`；部署即终态。
-- **会短暂持有用户资产** —— 这一点与 `BatchTransfer` 不同，必须说清楚。`zapToken` 把用户的两笔代币 `transferFrom` 到合约自身，在这里完成兑换与加池，然后把没用掉的部分退回；`zapNativeToken` 把 `msg.value` 包成 wrapped native 留在合约内做同样的处理，退回时解包成原生币发回。因此在**同一笔交易内**，合约地址会短暂持有用户的代币与 LP 授权。
+- **会短暂持有用户资产** —— 这一点与 `BatchTransfer` 不同，必须说清楚。`zapToken` 把用户的两笔代币 `transferFrom` 到合约自身，在这里完成兑换与加池，然后把没用掉的部分退回；`zapNativeToken` 把 `msg.value` 包成 wrapped native 留在合约内做同样的处理，退回时按 `refundAsNative` 决定解包成原生币发回、还是直接退 wrapped native。因此在**同一笔交易内**，合约地址会短暂持有用户的代币与 LP 授权。
   - 这笔交易的原子性就是保障：任何一步回滚（滑点不达标、Router 报错、退款失败、`deadline` 过期）都会让整笔交易连同已转入的资产一起回滚，不存在"钱进了合约但交易失败"的状态。
   - 退款按**差值**计算，不是按输入金额：`_refundTokenExcess` / `_refundWrappedNativeExcessAsNative` 在转入前先记下余额，只退"比转入前多出来的部分"。合约里如果本来就躺着别人的代币（误转、旧交易残留），不会被当成本次输入退给调用者，也不会被本次调用动用。`testZapTokenDoesNotRefundExistingBalances` 与 `testZapNativeTokenDoesNotRefundExistingBalances` 钉住这条。
   - 授权只给 Router，且是**逐笔精确额度**（`forceApprove` 到本次要用的数），兑换与加池完成后立即归零。合约不保存任何跨交易的 `allowance`。
@@ -287,7 +295,7 @@ Router 的地址**不在本模块的参数文件里**：它由 `dex` 部署，�
 写在这里是为了让集成方按正确的方式使用，而不是靠读源码自己发现。
 
 - **只支持标准 ERC20。** fee-on-transfer（转账扣费）与 rebasing（余额自动缩放）代币不支持：`zapToken` 与 `zapNativeToken` 按**名义**数量授权与使用代币，实际到账若少于名义值，差额会由合约里既有的余额补上（那部分本属他人或此前误转）。标准 ERC20 下花费恒不超过转入量，因此不成立。`BatchTransfer` 同理：它按 `amounts` 逐笔 `transferFrom`，不做到账量校验。
-- **兑换腿的滑点下界是本仓给的，不是调用方给的。** `_swapExcess` 用 `_getAmountOut` 按交换前储备算出的应收量扣掉 1% 作为 `amountOutMin`。同笔交易内储备不会变，所以正常情况下这个下界只是防三明治；真正的价格保护仍是调用方传入的 `amountAMin` / `amountBMin` / `liquidityMin`。
+- **兑换腿的滑点下界是「一致性检查」，不是三明治防护。** `_swapExcess` 用合约自己读到的储备算出应收量、扣掉 1% 作为 `amountOutMin`，它挡的是 Router 报价与合约所读储备不一致的偏差。三明治发生在合约读储备之前，下界会随被操纵的价格一起移动，因此**挡不住**。真正的价格保护只能来自调用方的 `amountAMin` / `amountBMin` / `liquidityMin`，传 0 等于没有保护。
 - **退款形式由调用方选择**（`refundAsNative`）。合约调用方传 `false`，否则没有 `receive()` 的合约会因为 1 wei 的 wrapped native 退款失败而整笔回滚。
 - **`gasLimit` 是调用方的责任。** 给得太低会让整批回滚（有意如此：一笔失败即整批回滚），给得太高则失去「单个收款方吞掉预算」的保护。EIP-150 仍会把实际转发量压到剩余 gas 的 63/64。
 - **批量大小没有上限。** 这是调用方付 gas 的设计，不是遗漏；但 batch 越大，单笔交易越可能触及区块 gas 上限。

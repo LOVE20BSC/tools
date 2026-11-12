@@ -260,7 +260,9 @@ def e2e_script_structure() -> None:
     assert "set -euo pipefail" in script.read_text(), script
     assert os.access(script, os.X_OK), f"{script} is not executable"
 
-    text = script.read_text()
+    # Strip comments: the guard would otherwise be satisfied by writing the expected strings into a
+    # comment, which would prove nothing about the code path.
+    text = code_lines(script.read_text())
     # Drives the real entry points instead of a parallel deployment implementation.
     for entry in ("one_click_deploy_batch_transfer.sh", "one_click_deploy_uniswap_v2_zap.sh"):
         assert entry in text, f"{script} does not drive {entry}"
@@ -422,7 +424,7 @@ def fake_tool(tool: str, args: list) -> int:
         elif args[0] == "code":
             if os.environ.get("RPC_CODE_ERROR"):
                 return 1
-            print("0x" + "60" * 100)
+            print(os.environ.get("MOCK_CODE", data["code"]))
         elif args[0] == "call":
             signature = args[2]
             overrides = json.loads(os.environ.get("MOCK_CALL_OVERRIDES", "{}"))
@@ -541,7 +543,14 @@ def behavioural_checks() -> int:
         tmp_dir.mkdir()
         deployed = "0x" + "ab" * 20
         data_path, log_path = root / "rpc.json", root / "calls.log"
-        data_path.write_text(json.dumps({"chain_id": "31337", "address": deployed, "gas_limit": "50000"}))
+        runtime_code = "0x" + "60" * 100
+        data_path.write_text(
+            json.dumps({"chain_id": "31337", "address": deployed, "code": runtime_code}))
+        # `21_check` compares the deployed code against the local build artifact, so the throwaway root
+        # needs one to compare against.
+        artifact = root / "out/BatchTransfer.sol/BatchTransfer.json"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text(json.dumps({"deployedBytecode": {"object": runtime_code}}))
         network.joinpath("network.params").write_text("CHAIN_ID=31337\nRPC_URL=http://invalid.local\n")
         network.joinpath("batch-transfer.params").write_text("# BatchTransfer has no constructor parameters\n")
         address_file = network / "addresses.batch-transfer.params"
@@ -616,6 +625,9 @@ def behavioural_checks() -> int:
         # 5. Each on-chain mismatch fails on its own.
         result, _ = run("21_check_batch_transfer.sh", False, RPC_CODE_ERROR="1")
         assert "not deployed" in result.stdout + result.stderr, result.stdout + result.stderr
+        # Code presence alone would accept any contract at the address; the hash has to differ too.
+        result, _ = run("21_check_batch_transfer.sh", False, MOCK_CODE="0x" + "61" * 100)
+        assert "does not match the local build" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("21_check_batch_transfer.sh", False, RPC_CHAIN="56")
         assert "chain ID" in result.stdout + result.stderr, result.stdout + result.stderr
 
@@ -781,6 +793,7 @@ def zap_behavioural_checks() -> int:
         data_path.write_text(json.dumps({
             "chain_id": "31337",
             "address": deployed,
+            "code": "0x" + "60" * 100,
             "calls": {
                 "ROUTER()(address)": router,
                 "FACTORY()(address)": factory,
