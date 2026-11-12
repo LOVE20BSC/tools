@@ -15,7 +15,7 @@ script/e2e/anvil_e2e.sh --keep   # 保留链与部署结果，便于排查
 | 链与依赖 | 从空链出发；部署 WETH9 / Factory / Router02；`router.factory()` 与 `router.WETH()` 回读一致 |
 | 部署路径 | 跑 `one_click_deploy_batch_transfer.sh` 与 `one_click_deploy_uniswap_v2_zap.sh`，含各自的 `2x` 校验步骤与 `ROUTER()` / `FACTORY()` / `WRAPPED_NATIVE_TOKEN()` 回读 |
 | BatchTransfer | `batchTransferNative` 真的转账，逐笔核对收款方余额 |
-| UniswapV2Zap | `zapToken` 建对并铸 LP；`zapNativeToken` 走原生币入口；两次调用后 Zap **零残留**（token / WETH / LP 都为 0） |
+| UniswapV2Zap | `zapToken` 建对并铸 LP；`zapNativeToken` 走原生币入口；两次调用后 Zap 的 token 与 WETH 余额均为 0，`zapToken` 后另查 LP 余额为 0 |
 | 自定义错误 | `ZeroInputAmounts` 的 selector 与 `AmountExceeded` 的载荷 |
 
 `zap` 的零残留是「不托管用户资产」这条承诺的可执行形式，比读代码更可靠。
@@ -53,7 +53,7 @@ script/e2e/anvil_e2e.sh --keep   # 保留链与部署结果，便于排查
 
 **跑在仓内，跑完还原。** 脚本直接使用 `script/network/anvil31337_dev/` 下的地址文件，因此会改写它们；退出时（无论成功、失败还是被中断）从临时备份还原，所以工作树不会被弄脏。`broadcast/` 与 `cache/` 会写入，两者都在 `.gitignore` 内。
 
-**Uniswap 由脚本自己部署，用 anvil 的公开默认私钥。** 那把私钥是 `anvil` 启动时打印的本地测试账户，只用于部署依赖栈，使这一步不依赖操作者的 keystore；两个工具本身仍然走 keystore 这条生产路径。地址文件按 `dev-standards` §6.2 的方式生成——它是 `dex` 的 `addresses.uniswapv2.params` 的复制件，不是在本仓手工合并出来的。
+**Uniswap 由脚本自己部署，用 anvil 的公开默认私钥。** 那把私钥是 `anvil` 启动时打印的本地测试账户，只用于部署依赖栈，使这一步不依赖操作者的 keystore；两个工具本身仍然走 keystore 这条生产路径。依赖栈的地址按 `dev-standards` §6.2 的方式写成 `addresses.uniswapv2.params`（键名与 `dex` 生产的完全一致），内容是本次新部署的 Factory 与 Router；真实运行时这个文件是从 `dex` 逐字节复制来的，E2E 之所以现写，是因为它部署的是一条新链。
 
 **不检查的**：源码验证（31337 在 `verifier.params` 的跳过名单里）、非 anvil 网络、以及 `forge test` 已经覆盖的单元行为。本脚本补的是单元测试覆盖不到的那一段：脚本链、真实字节码、真实 Router、真实 gas。
 
@@ -61,7 +61,7 @@ script/e2e/anvil_e2e.sh --keep   # 保留链与部署结果，便于排查
 
 | 现象 | 原因 |
 | --- | --- |
-| `something is already listening on ...` | 端口被占用；停掉现有链或用 `E2E_PORT=8546` |
+| `something is already listening on ...` | 端口被占用；停掉现有链，或用 `E2E_PORT=8546`（脚本会把 `network.params` 的 `RPC_URL` 一并指过去，跑完还原） |
 | `missing dex artifact` | `dex` 没构建；跑 `make -C ../dex build` |
 | `KEYSTORE_PASSWORD empty` | `.account` 里没写密码，脚本刻意不弹窗，以便非交互运行 |
 | `INSUFFICIENT_B_AMOUNT`（`zapNativeToken`） | 给的币对比例与池子不符，Router 自身的滑点检查拦下了；检查测试参数 |

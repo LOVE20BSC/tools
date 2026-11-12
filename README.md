@@ -40,7 +40,23 @@ python3 -c 'import json,hashlib;print(hashlib.sha256(json.dumps(json.load(open("
 ```
 
 
-**函数：5 个，全部未变**（选择器一致）。
+**函数：5 个，选择器全部未变；其中 2 个的参数名改了。**
+
+| 函数 | 参数名变化 |
+| --- | --- |
+| `zapNativeToken` | `token` → `tokenAddress` |
+| `quoteZapNativeToken` | `token` → `tokenAddress` |
+
+参数名不进选择器，但它是 ABI JSON 的 `name` 字段，属于集成方看到的 API（`naming-standards` §十：`address` 类型的实体参数带 `Address` 后缀）。`zapToken` 的入参是 `ZapTokenParams` 结构体，其字段名未变。
+
+**此外新增 2 个继承错误，旧仓 ABI 里没有**（OpenZeppelin v4→v5 的连带结果，本合约并未自己声明它们）：
+
+| 错误 | 选择器 | 来源 |
+| --- | --- | --- |
+| `ReentrancyGuardReentrantCall()` | `0x3ee5aeb5` | OZ v5 `ReentrancyGuard` 用自定义错误替代了 v4 的 `Error(string)`（`"ReentrancyGuard: reentrant call"`） |
+| `SafeERC20FailedOperation(address)` | `0x5274afe7` | OZ v5 `SafeERC20` 用带 token 地址的自定义错误替代了 v4 的 `Error(string)` |
+
+**前端按 selector 做错误映射时必须补上这两个**，否则 Zap 的重入保护与三处 ERC20 失败路径（`forceApprove`、`safeTransfer`、`safeTransferFrom`）会落到「未知错误」。旧仓这两个条件抛出的是 `Error(string)`（`0x08c379a0`），映射方式本来也不同。
 
 **事件：2 个，全部改名**（topic0 随之改变）。
 
@@ -180,7 +196,7 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 - `batchTransferERC20(address tokenAddress, address[] recipients, uint256[] amounts)` —— 先校验 `tokenAddress` 有代码，再一次性核对发送方余额与对本合约的授权额度，通过后才逐笔 `transferFrom`。
 - `nativeBalances(address[] accounts)` / `erc20Balances(address tokenAddress, address[] accounts)` —— 批量读余额，同样先校验 `tokenAddress` 有代码。
 
-批量要么全成、要么全回滚：任何一笔失败都会 revert 整笔交易，并带上失败元素的下标（`NativeTransferFailed`、`ERC20TransferFailed`、`ERC20InvalidReturn` 等都带 `index`）。零收款地址与零金额被拒绝，空批次与数组长度不一致被拒绝。ERC20 一侧同时接受标准布尔返回与无返回值的旧式代币，返回数据短于 32 字节视为失败。
+批量要么全成、要么全回滚：任何一笔失败都会 revert 整笔交易，并带上失败元素的下标（`NativeTransferFailed`、`ERC20TransferFailed`、`ERC20InvalidReturn` 等都带 `index`）。零收款地址与零金额被拒绝，空批次与数组长度不一致被拒绝。ERC20 一侧同时接受标准布尔返回与无返回值的旧式代币：返回 0 字节视为成功（兼容不给返回值的旧币），返回 1～31 字节视为失败，返回 ≥32 字节时只认解码结果为 `1`（源码 `_isSuccessfulERC20Return`）。
 
 **构造函数参数**：无。合约不接收任何构造参数，也没有 `init` 或后续配置入口。
 
@@ -188,15 +204,17 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 
 - **无 owner** —— 没有 owner、admin、operator 或任何特权地址；部署后不存在只有某个地址能调的入口。
 - **无升级** —— 不是代理，没有实现槽、没有 `upgradeTo`；部署即终态。
-- **无托管** —— 合约不保存任何余额。原生币在同一笔交易内转发完毕（`msg.value` 必须精确等于总额），ERC20 走 `transferFrom` 从发送方直达收款方，合约地址本身不留余额。合约也不持有授权之外的能力：`allowance` 由发送方在每次调用前自行设置，合约不能主动提取。
+- **无托管** —— 合约**自己不接收任何资产**：原生币在同一笔交易内转发完毕（`msg.value` 必须精确等于总额），ERC20 走 `transferFrom` 从发送方直达收款方。合约也不持有授权之外的能力：`allowance` 由发送方在每次调用前自行设置。
 
-因此本合约没有"跑路"路径可言：任何调用者能做的事，都只是把自己名下的资产按自己给的清单转出去。
+  但「合约地址上永远不会有余额」是个过强的说法，准确说法是「本合约没有收取资产的功能」：任何人都可以用 `selfdestruct` 强制向它转入原生币，任何 ERC20 也可以把余额记到它名下。区别在于**这些资产没有提取入口**——合约没有 `receive`、没有 `sweep`、没有任何转出余额的路径，所以它们会永久留在该地址。这不是安全问题（转入者自己损失），但不要在文档或集成侧假设该地址的余额恒为零。
+
+因此本合约没有「跑路」路径可言：任何调用者能做的事，都只是把自己名下的资产按自己给的清单转出去。
 
 **地址文件**：部署后地址写入 `script/network/<network>/addresses.batch-transfer.params`，键名 `BATCH_TRANSFER_ADDRESS`。该文件由部署脚本写入，`21_check_batch_transfer.sh` 会断言键集合恰好等于期望合约集合。构造参数文件 `script/network/<network>/batch-transfer.params` 存在但只含注释——本合约无构造参数，保留该文件是为了让每个模块在 `script/network/<network>/` 下保持同一形状。
 
 ### UniswapV2Zap
 
-**做什么**。一个无状态的 Uniswap V2 加池工具，四个入口：
+**做什么**。一个 Uniswap V2 加池工具，四个入口（除了重入锁，合约没有业务状态）：
 
 - `zapToken(ZapTokenParams params)` —— 把 `tokenA`/`tokenB` 两种代币加入它们的 V2 池并铸造 LP。单边输入时先把超出比例的那一侧换成另一侧，再把两侧一起加进池子；两边都给时按池子当前比例取用，多出来的原路退回。`ZapTokenParams` 里的 `amountAMin`/`amountBMin`/`liquidityMin` 是三条独立的滑点底线，`to` 是 LP 的接收方。
 - `zapNativeToken(address tokenAddress, uint256 amountTokenIn, uint256 amountTokenMin, uint256 amountNativeMin, uint256 liquidityMin, address to, uint256 deadline)` —— 同一件事，但一侧是原生币。`msg.value` 换成 wrapped native 后与 `tokenAddress` 组成池子；单边输入时同样先换再池。
@@ -205,11 +223,11 @@ script/e2e/anvil_e2e.sh          # 起链 → 部署依赖 → 部署本仓工�
 
 兑换方向由池子当前的储备比决定：哪一侧给多了就换哪一侧。内部兑换量由一个闭式解算出（`_calcAmountToSwap`），不是迭代逼近，所以预测与执行不会因舍入而分叉。
 
-**构造函数参数**：一个地址 `router`，即 UniswapV2 Router02。`factory` 与 `wrappedNativeToken` **不在构造参数里**：合约在构造期从 Router 的 `factory()` 与 `WETH()` 反查并缓存为 immutable（`dev-standards` §5.4 —— 能由入参 getter 派生的依赖不再重复入参）。三方任一为零即回滚（`ZeroRouter`、`ZeroFactory`、`ZeroWrappedNativeToken`）。
+**构造函数参数**：一个地址 `router`，即 UniswapV2 Router02。`FACTORY` 与 `WRAPPED_NATIVE_TOKEN` **不在构造参数里**：合约在构造期从 Router 的 `factory()` 与 `WETH()` 反查并缓存为 immutable（`dev-standards` §5.4 —— 能由入参 getter 派生的依赖不再重复入参）。三方任一为零即回滚（`ZeroRouter`、`ZeroFactory`、`ZeroWrappedNativeToken`）。
 
 **承诺**：
 
-- **无 owner** —— 没有 owner、admin、operator 或任何特权地址。合约只有 immutable 的 `router`/`factory`/`wrappedNativeToken` 三个读接口，部署后不存在只有某个地址能调的入口；`testNoAdminFunctions` 逐个断言 `owner()`/`pause()`/`recover(address,uint256)`/`admin()` 都不存在。
+- **无 owner** —— 没有 owner、admin、operator 或任何特权地址。合约只有 immutable 的 `ROUTER()`/`FACTORY()`/`WRAPPED_NATIVE_TOKEN()` 三个读接口，部署后不存在只有某个地址能调的入口；`testNoAdminFunctions` 逐个断言 `owner()`/`pause()`/`recover(address,uint256)`/`admin()` 都不存在。
 - **无升级** —— 不是代理，没有实现槽、没有 `upgradeTo`；部署即终态。
 - **会短暂持有用户资产** —— 这一点与 `BatchTransfer` 不同，必须说清楚。`zapToken` 把用户的两笔代币 `transferFrom` 到合约自身，在这里完成兑换与加池，然后把没用掉的部分退回；`zapNativeToken` 把 `msg.value` 包成 wrapped native 留在合约内做同样的处理，退回时解包成原生币发回。因此在**同一笔交易内**，合约地址会短暂持有用户的代币与 LP 授权。
   - 这笔交易的原子性就是保障：任何一步回滚（滑点不达标、Router 报错、退款失败、`deadline` 过期）都会让整笔交易连同已转入的资产一起回滚，不存在"钱进了合约但交易失败"的状态。

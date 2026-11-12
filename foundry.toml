@@ -22,24 +22,31 @@ fail_on_revert = false
 [lint]
 severity = ["high", "med", "low"]
 ignore = ["test/**/*.sol"]
-# missing-zero-check: 本合约没有构造函数（nor init），因此不存在需要在构造函数里做静态零值校验的行；
-# 部署期的静态校验全在 DeployBatchTransfer.s.sol，按 dev-standards §5.7 / §6.3 归部署脚本。
-# 这一条不需要写进 exclude_lints：本合约根本没有会触发它的位置。
+# missing-zero-check: 两个合约都不在这个 lint 的作用面上——BatchTransfer 没有构造函数，因此没有
+# 「构造期不校验零值」的位置；UniswapV2Zap 有构造函数，且它确实校验了（ZeroRouter / ZeroFactory /
+# ZeroWrappedNativeToken）。部署期的静态校验按 dev-standards §5.7 / §6.3 归部署脚本。这一条因此
+# 不需要写进 exclude_lints。
 #
-# exclude_lints 逐条按本合约的真实理由给出，不是从 action/ 照抄的治理合约语境：
-# - calls-loop: batchTransferNative 通过 recipients[i].call 逐个付款、_safeTransferFrom 逐个
-#   transferFrom、_erc20BalanceOf 逐个 balanceOf —— 对一批外部地址循环调用就是「批量工具」的
-#   定义行为，不是遗漏。这三处每次调用都必须拿到最新外部状态，无法合并成一次调用；未来若要从
-#   全局禁用收紧为行内抑制，方案见本文件末尾注释。
-# - reentrancy-events: 本合约无状态（无 storage、无 owner、不托管资产），事件之前没有任何写操作，
-#   重入无法伪造或重排本合约的可信状态；事件只由 msg.sender 与已验证入参构成，重入最多把这笔
-#   如实发生的事实重复记录一次，不影响链下对账。
-# - unused-return: 批量入口有意忽略部分 tuple 返回值（例如只判 call 的 success、余额查询只看
-#   data 长度），返回值的完整校验在同一函数内单独完成，不依赖这些被忽略的分量。
-#   注：本类当前对本合约的实际告警数为 0，保留它是为防止后续改动引入忽略返回值时静默通过。
+# exclude_lints 是仓级配置，同时作用于两个合约，所以每条理由必须覆盖两者。下面按实测的告警位置给：
+# BatchTransfer.sol:25/126/155 与 UniswapV2Zap.sol:70/112/423 是 calls-loop 与 reentrancy-events
+# 的实际命中点（把 exclude_lints 清空后跑 `forge lint` 可复现：calls-loop 3 条、reentrancy-events
+# 4 条、unused-return 1 条）。
+# - calls-loop（仅 BatchTransfer）：batchTransferNative 逐个 call 付款、_erc20BalanceOf 逐个
+#   balanceOf、_safeTransferFrom 逐个 transferFrom。对一批外部地址循环调用就是「批量工具」的定义
+#   行为；每次都必须拿到最新外部状态，无法合并成一次调用。UniswapV2Zap 没有循环，不受这条影响。
+# - reentrancy-events（两个合约都命中）：这条 lint 问的是「事件发出前有没有经过外部调用，以及重入
+#   能否借此伪造或重排链下依赖的日志」。两个合约的答案都是否，但理由不同：
+#     · BatchTransfer 无状态、无 owner、不托管资产，事件前没有任何写操作，重入无法伪造可信状态；
+#       事件只由 msg.sender 与已验证入参构成，重入最多把这笔如实发生的事实重复记录一次。
+#     · UniswapV2Zap 有重入锁（OZ ReentrancyGuard 的 ERC-7201 命名空间槽，见
+#       `forge inspect UniswapV2Zap storage`——标准布局里看不到它），两个入口都是 nonReentrant，
+#       且事件在函数末尾一次性发出、载荷来自本函数算出的结果，重入无法插入第二个 zap。
+# - unused-return（仅 BatchTransfer）：批量入口有意忽略部分 tuple 返回值（只判 call 的 success、
+#   余额查询只看 data 长度），被忽略的分量在同一函数内单独校验。本类当前实际告警数 0，保留它是
+#   为防止后续改动引入忽略返回值时静默通过。
 #
-# arbitrary-send-eth 与 return-bomb 不在全局列表里：它们在 src/BatchTransfer.sol 原生币转发的
-# 那一行用 `forge-lint: disable-next-line(...)` 精确抑制，其余位置仍需接受检查。
+# arbitrary-send-eth 与 return-bomb 不在全局列表里：它们分别在 src/BatchTransfer.sol 与
+# src/UniswapV2Zap.sol 的原生币转发处用 `forge-lint: disable-next-line(...)` 精确抑制。
 exclude_lints = ["calls-loop", "reentrancy-events", "unused-return"]
 
 # 若要把 calls-loop 收紧为行内抑制（当前未执行，待评审决定）：

@@ -37,6 +37,11 @@ contract DeployUniswapV2Zap is Script {
     function _loadConfig() internal view returns (UniswapV2ZapConfig memory config) {
         config.chainId = vm.envUint("CHAIN_ID");
         config.router = vm.envAddress("ROUTER_ADDRESS");
+        // Check the Router has code *before* deriving from it. Calling `factory()` on an EOA or a
+        // non-Router contract reverts while decoding an empty return value, which is a far less
+        // useful message than saying the Router is not a contract -- and it would make the
+        // `Router must be a deployed contract` check in `_validateConfig` unreachable.
+        require(config.router.code.length != 0, "Router must be a deployed contract");
         // Derived, not configured: the zap caches these two at construction time, so validating them
         // before the broadcast is what keeps a wrong Router from producing a wrong-but-deployed zap.
         config.factory = IUniswapV2Router02(config.router).factory();
