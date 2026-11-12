@@ -124,7 +124,7 @@ git -C ../LOVE20TKM/periphery show <commit>:out/<Contract>.sol/<Contract>.json  
 
 ### 逻辑语义未变的依据
 
-ABI 变了，所以不能再用「ABI 一致」证明行为未变。现在的依据是**迁移时的 23 个用例逐条保留、断言强度未降、全部通过**，加上整改与评审后新增的用例（合计 BatchTransfer 27 + 3、UniswapV2Zap 67 + 12，另 49 项部署脚本回归）。
+ABI 变了，所以不能再用「ABI 一致」证明行为未变。现在的依据是**迁移时的 23 个用例逐条保留、断言强度未降、全部通过**，加上整改与评审后新增的用例（合计 BatchTransfer 27 + 3、UniswapV2Zap 67 + 12，另 50 项部署脚本回归）。
 
 按变更性质分三类：
 
