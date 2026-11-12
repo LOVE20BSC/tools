@@ -307,8 +307,8 @@ step "4. BatchTransfer on chain"
 R1=0x000000000000000000000000000000000000A001
 R2=0x000000000000000000000000000000000000A002
 R3=0x000000000000000000000000000000000000A003
-if send_tool "$BT" "batchTransferNative(address[],uint256[])" \
-        "[$R1,$R2,$R3]" "[1000000000000000000,2000000000000000000,3000000000000000000]" \
+if send_tool "$BT" "batchTransferNative(address[],uint256[],uint256)" \
+        "[$R1,$R2,$R3]" "[1000000000000000000,2000000000000000000,3000000000000000000]" 50000 \
         --value 6000000000000000000 >/dev/null 2>&1; then
     pass "batchTransferNative executed"
 else
@@ -350,8 +350,8 @@ assert_eq "zap holds no LP after zapToken" "0" "$(cast call "$PAIR" 'balanceOf(a
 
 # A second entry point, with a ratio that matches the 1:1 pool so the router's own slippage check
 # does not fire.
-if send_tool "$ZAP" "zapNativeToken(address,uint256,uint256,uint256,uint256,address,uint256)" \
-        "$TOKEN" 1000000000000000000 0 0 0 "$ACCOUNT_ADDRESS" "$DEADLINE" --value 1ether >/dev/null 2>&1; then
+if send_tool "$ZAP" "zapNativeToken(address,uint256,uint256,uint256,uint256,address,bool,uint256)" \
+        "$TOKEN" 1000000000000000000 0 0 0 "$ACCOUNT_ADDRESS" true "$DEADLINE" --value 1ether >/dev/null 2>&1; then
     pass "zapNativeToken executed"
 else
     fail "zapNativeToken reverted"

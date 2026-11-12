@@ -242,6 +242,44 @@ def scripts_stay_within_bash_32() -> None:
         assert not offenders, f"{script} uses bash-4-only syntax: {offenders}"
 
 
+def e2e_script_structure() -> None:
+    """Structural guard for `script/e2e/anvil_e2e.sh`.
+
+    The end-to-end script cannot run here — it needs anvil and a built `dex` checkout — so this only
+    pins the properties that a silent regression would break without any test noticing: the file is
+    executable, it parses under the shell that macOS ships, it drives the deploy entry points rather
+    than re-implementing deployment, and it restores the files it rewrites.
+
+    Three real defects reached a green run through this gap before it existed: a bash-4 expansion that
+    made an assertion compare two empty strings, and a cleanup trap whose signal handler resumed the
+    script. The first is caught by `scripts_stay_within_bash_32`; the second by the `exit` requirement
+    below.
+    """
+    script = repo_root() / "script/e2e/anvil_e2e.sh"
+    assert script.is_file(), script
+    assert "set -euo pipefail" in script.read_text(), script
+    assert os.access(script, os.X_OK), f"{script} is not executable"
+
+    text = script.read_text()
+    # Drives the real entry points instead of a parallel deployment implementation.
+    for entry in ("one_click_deploy_batch_transfer.sh", "one_click_deploy_uniswap_v2_zap.sh"):
+        assert entry in text, f"{script} does not drive {entry}"
+    # Restores every file it rewrites, including the network config it repoints.
+    assert "BACKUP_DIR" in text and "network.params" in text, script
+    # A signal trap that only runs cleanup resumes the script; each one has to exit. Check both
+    # signals separately: matching the shared prefix would still pass if one of them regressed.
+    for signal, code in (("INT", "130"), ("TERM", "143")):
+        expected = f"trap 'cleanup; exit {code}' {signal}"
+        assert expected in text, f"{script} does not terminate on {signal} (expected: {expected})"
+
+    # `bash -n` under the system shell catches syntax errors the e2e run would only hit on execution.
+    for shell in ("/bin/bash", "/bin/sh"):
+        if not os.path.exists(shell):
+            continue
+        result = subprocess.run([shell, "-n", str(script)], capture_output=True, text=True)
+        assert result.returncode == 0, (shell, result.stderr)
+
+
 def scripts_have_shebang_and_exec_bit() -> None:
     """Every deploy script is a bash script; every step/entry script is executable.
 
@@ -391,8 +429,6 @@ def fake_tool(tool: str, args: list) -> int:
             failing = set(json.loads(os.environ.get("MOCK_CALL_FAILURES", "[]")))
             if signature in overrides:
                 print(overrides[signature])
-            elif signature == "NATIVE_TRANSFER_GAS_LIMIT()(uint256)":
-                print(os.environ.get("BAD_GAS_LIMIT", data["gas_limit"]))
             elif signature in {
                 "ROUTER()(address)",
                 "FACTORY()(address)",
@@ -567,17 +603,17 @@ def behavioural_checks() -> int:
         result, _ = run("21_check_batch_transfer.sh", False)
         assert "key set mismatch" in result.stdout + result.stderr, result.stdout + result.stderr
 
-        # 4. Happy path: deployed, chain matches, gas limit matches.
+        # 4. Happy path: deployed and chain matches. The contract no longer exposes a deployment-time
+        # constant (the per-recipient gas budget is a call argument), so there is no value to read
+        # back; the step's job is deployment identity plus the address-file key set.
         address_file.write_text(f"BATCH_TRANSFER_ADDRESS={deployed}\n")
         result, log = run("21_check_batch_transfer.sh")
         output = result.stdout + result.stderr
         assert "BatchTransfer verified" in output, output
-        assert any(call[:2] == ["cast", "call"] and call[3] == "NATIVE_TRANSFER_GAS_LIMIT()(uint256)"
-                   for call in log), log
+        assert any(call[:2] == ["cast", "code"] for call in log), log
+        assert not any(call[:2] == ["cast", "call"] for call in log), log
 
         # 5. Each on-chain mismatch fails on its own.
-        result, _ = run("21_check_batch_transfer.sh", False, BAD_GAS_LIMIT="30000")
-        assert "NATIVE_TRANSFER_GAS_LIMIT" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("21_check_batch_transfer.sh", False, RPC_CODE_ERROR="1")
         assert "not deployed" in result.stdout + result.stderr, result.stdout + result.stderr
         result, _ = run("21_check_batch_transfer.sh", False, RPC_CHAIN="56")
@@ -662,7 +698,9 @@ def behavioural_checks() -> int:
 
         # 15. The entrypoint restores the previous address when the post-deploy check fails.
         address_file.write_text("# previous deployment\n")
-        for extra in ({"RPC_CHAIN": "56"}, {"BAD_GAS_LIMIT": "1"}, {"DEPLOY_FAIL": "1"}):
+        # The contract no longer exposes a deployment-time constant, so the only ways the post-deploy
+        # check can fail are a wrong chain and a failed deployment.
+        for extra in ({"RPC_CHAIN": "56"}, {"DEPLOY_FAIL": "1"}):
             result, _ = run("one_click_deploy_batch_transfer.sh", False, **extra)
             assert address_file.read_text() == "# previous deployment\n", address_file.read_text()
             output = result.stdout + result.stderr
@@ -959,6 +997,7 @@ def main() -> None:
     network_params_keys()
     scripts_have_shebang_and_exec_bit()
     scripts_stay_within_bash_32()
+    e2e_script_structure()
     deploy_script_has_no_hardcoded_address()
     deploy_script_structure()
     uniswap_v2_zap_deploy_script_structure()
