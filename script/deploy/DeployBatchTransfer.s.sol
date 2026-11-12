@@ -14,11 +14,6 @@ import {BatchTransfer} from "../../src/BatchTransfer.sol";
 /// and §6.3 allows either form. `11_deploy_batch_transfer.sh` extracts the line from the deploy log
 /// and replaces the address file atomically.
 contract DeployBatchTransfer is Script {
-    /// @dev Deploy-time invariant of the contract under deployment, not a deployment parameter:
-    /// each native transfer is forwarded with a fixed gas budget so one recipient cannot consume
-    /// the whole batch. 21_check_batch_transfer.sh re-reads it independently.
-    uint256 internal constant EXPECTED_NATIVE_TRANSFER_GAS_LIMIT = 50_000;
-
     struct BatchTransferConfig {
         uint256 chainId;
     }
@@ -44,13 +39,10 @@ contract DeployBatchTransfer is Script {
     }
 
     function _validateDeployment(BatchTransfer batchTransfer) internal view {
+        // The contract has no constructor parameters and no deployment-time constants: every knob
+        // (including the per-recipient gas budget) is a call argument now, so the only thing left to
+        // verify is that code actually landed. Behaviour is covered by the test suite.
         require(address(batchTransfer).code.length != 0, "BatchTransfer deployment failed");
-        // Read the value back from chain state rather than trusting the source: a wrong gas limit
-        // silently changes how much work each recipient may do, and nothing else would notice.
-        require(
-            batchTransfer.NATIVE_TRANSFER_GAS_LIMIT() == EXPECTED_NATIVE_TRANSFER_GAS_LIMIT,
-            "NATIVE_TRANSFER_GAS_LIMIT mismatch"
-        );
     }
 
     function _logDeploymentSummary(address batchTransfer) internal pure {

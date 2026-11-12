@@ -5,14 +5,15 @@ import {IBatchTransfer} from "./interfaces/IBatchTransfer.sol";
 import {IERC20Minimal} from "./interfaces/IERC20Minimal.sol";
 
 contract BatchTransfer is IBatchTransfer {
-    uint256 public constant override NATIVE_TRANSFER_GAS_LIMIT = 50_000;
-
-    function batchTransferNative(address[] calldata recipients, uint256[] calldata amounts)
+    function batchTransferNative(address[] calldata recipients, uint256[] calldata amounts, uint256 gasLimit)
         external
         payable
         override
         returns (uint256 totalAmount)
     {
+        // Scalar argument checks come first in both entry points, so the order errors surface in does
+        // not depend on which variant the caller used.
+        _checkGasLimit(gasLimit);
         totalAmount = _checkTransferBatch(recipients, amounts);
         if (msg.value != totalAmount) {
             revert NativeValueMismatch(totalAmount, msg.value);
@@ -22,7 +23,7 @@ contract BatchTransfer is IBatchTransfer {
         for (uint256 i = 0; i < recipientCount; i++) {
             (bool success, bytes memory data) =
                 // forge-lint: disable-next-line(arbitrary-send-eth, return-bomb)
-                recipients[i].call{value: amounts[i], gas: NATIVE_TRANSFER_GAS_LIMIT}("");
+                recipients[i].call{value: amounts[i], gas: gasLimit}("");
             if (!success) {
                 (bytes32 errorHash, uint256 errorLength) = _errorFingerprint(data);
                 // forge-lint: disable-next-line(require-revert-in-loop)
@@ -37,12 +38,14 @@ contract BatchTransfer is IBatchTransfer {
         });
     }
 
-    function batchTransferERC20(address tokenAddress, address[] calldata recipients, uint256[] calldata amounts)
-        external
-        override
-        returns (uint256 totalAmount)
-    {
+    function batchTransferERC20(
+        address tokenAddress,
+        address[] calldata recipients,
+        uint256[] calldata amounts,
+        uint256 gasLimit
+    ) external override returns (uint256 totalAmount) {
         _checkTokenContract(tokenAddress);
+        _checkGasLimit(gasLimit);
         totalAmount = _checkTransferBatch(recipients, amounts);
 
         uint256 senderBalance = _erc20BalanceOf(tokenAddress, msg.sender);
@@ -57,7 +60,7 @@ contract BatchTransfer is IBatchTransfer {
 
         uint256 recipientCount = recipients.length;
         for (uint256 i = 0; i < recipientCount; i++) {
-            _safeTransferFrom(tokenAddress, msg.sender, recipients[i], amounts[i], i);
+            _safeTransferFrom(tokenAddress, msg.sender, recipients[i], amounts[i], i, gasLimit);
         }
 
         emit ERC20BatchTransferred({
@@ -115,6 +118,10 @@ contract BatchTransfer is IBatchTransfer {
         }
     }
 
+    function _checkGasLimit(uint256 gasLimit) internal pure {
+        if (gasLimit == 0) revert ZeroGasLimit();
+    }
+
     function _checkTokenContract(address tokenAddress) internal view {
         if (tokenAddress == address(0) || tokenAddress.code.length == 0) {
             revert TokenNotContract(tokenAddress);
@@ -148,11 +155,22 @@ contract BatchTransfer is IBatchTransfer {
         allowanceAmount = abi.decode(data, (uint256));
     }
 
-    function _safeTransferFrom(address tokenAddress, address from, address to, uint256 amount, uint256 index)
-        internal
-    {
+    function _safeTransferFrom(
+        address tokenAddress,
+        address from,
+        address to,
+        uint256 amount,
+        uint256 index,
+        uint256 gasLimit
+    ) internal {
+        // return-bomb: a token that returns a huge payload makes this copy expensive. The token is
+        // chosen by the caller, so the cost lands on whoever picked it, and the gas limit bounds the
+        // callee itself. The full payload is kept on purpose: `keccak256` of it is what makes the
+        // failure diagnosable off chain, and truncating it would trade that away for a gas vector the
+        // caller already controls.
         (bool success, bytes memory data) =
-            tokenAddress.call(abi.encodeWithSelector(IERC20Minimal.transferFrom.selector, from, to, amount));
+            // forge-lint: disable-next-line(return-bomb)
+            tokenAddress.call{gas: gasLimit}(abi.encodeWithSelector(IERC20Minimal.transferFrom.selector, from, to, amount));
         if (!success) {
             (bytes32 errorHash, uint256 errorLength) = _errorFingerprint(data);
             // forge-lint: disable-next-line(require-revert-in-loop)

@@ -122,15 +122,9 @@ else
     echo "✓ BatchTransfer deployed"
 fi
 
-# The gas budget per native transfer is the only deployment-time constant the contract exposes, and
-# it is a hard-coded constant rather than a constructor argument: read it back so a source change
-# that silently alters it cannot pass the check.
-if [ "$FAILED" -eq 0 ]; then
-    ACTUAL_GAS_LIMIT=$(cast call "$BATCH_TRANSFER_ADDRESS" "NATIVE_TRANSFER_GAS_LIMIT()(uint256)" \
-        --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "NATIVE_TRANSFER_GAS_LIMIT" "50000" "$ACTUAL_GAS_LIMIT" || FAILED=$((FAILED + 1))
-fi
-
+# The contract exposes no deployment-time constants: the per-recipient gas budget is a call argument
+# now, so there is nothing to read back. Deployment identity is covered by the code-presence check
+# above; behaviour is covered by the test suite.
 if [ "$FAILED" -ne 0 ]; then
     echo "✗ $FAILED verification(s) failed"
     exit 1

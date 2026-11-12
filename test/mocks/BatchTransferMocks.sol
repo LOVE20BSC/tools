@@ -155,3 +155,18 @@ contract RejectNative {
         revert("REJECT_NATIVE");
     }
 }
+
+/// @dev Accepts native token but writes storage while doing so, which costs far more than a plain
+/// transfer. Used to prove that the caller-supplied gas limit is actually applied: with a limit below
+/// this cost the transfer must fail, and with a generous one it must succeed.
+contract GasHungryRecipient {
+    uint256 public received;
+    uint256 public writes;
+
+    receive() external payable {
+        // Three cold SSTOREs, comfortably above any small gas limit and well below the test budget.
+        received += msg.value;
+        writes += 1;
+        writes += 1;
+    }
+}

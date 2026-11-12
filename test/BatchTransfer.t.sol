@@ -6,6 +6,7 @@ import {BatchTransfer} from "../src/BatchTransfer.sol";
 import {IBatchTransferErrors, IBatchTransferEvents} from "../src/interfaces/IBatchTransfer.sol";
 import {
     BrokenQueryERC20,
+    GasHungryRecipient,
     MockERC20,
     NoReturnERC20,
     RejectNative,
@@ -13,6 +14,10 @@ import {
 } from "./mocks/BatchTransferMocks.sol";
 
 contract BatchTransferTest is Test, IBatchTransferEvents {
+    /// @dev Per-recipient gas budget used throughout; the contract takes it as an argument now, so the
+    /// tests pin one value rather than reading a constant off the contract.
+    uint256 internal constant GAS_LIMIT = 50_000;
+
     BatchTransfer internal batchTransfer;
     MockERC20 internal token;
 
@@ -38,7 +43,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
             recipientCount: 3
         });
         vm.prank(sender);
-        uint256 totalAmount = batchTransfer.batchTransferNative{value: 6 ether}(recipients, amounts);
+        uint256 totalAmount = batchTransfer.batchTransferNative{value: 6 ether}(recipients, amounts, GAS_LIMIT);
 
         assertEq(totalAmount, 6 ether);
         assertEq(recipient1.balance, 1 ether);
@@ -54,7 +59,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         vm.deal(sender, 10 ether);
         vm.prank(sender);
         vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.NativeValueMismatch.selector, 6 ether, 5 ether));
-        batchTransfer.batchTransferNative{value: 5 ether}(recipients, amounts);
+        batchTransfer.batchTransferNative{value: 5 ether}(recipients, amounts, GAS_LIMIT);
 
         assertEq(recipient1.balance, 0);
         assertEq(recipient2.balance, 0);
@@ -84,7 +89,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 _errorString("REJECT_NATIVE").length
             )
         );
-        batchTransfer.batchTransferNative{value: 2 ether}(recipients, amounts);
+        batchTransfer.batchTransferNative{value: 2 ether}(recipients, amounts, GAS_LIMIT);
 
         assertEq(recipient1.balance, 0);
         assertEq(address(rejectNative).balance, 0);
@@ -107,7 +112,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
             recipientCount: 3
         });
         vm.prank(sender);
-        uint256 totalAmount = batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        uint256 totalAmount = batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
 
         assertEq(totalAmount, 600);
         assertEq(token.balanceOf(sender), 400);
@@ -128,7 +133,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         noReturnToken.approve(address(batchTransfer), 600);
 
         vm.prank(sender);
-        uint256 totalAmount = batchTransfer.batchTransferERC20(address(noReturnToken), recipients, amounts);
+        uint256 totalAmount = batchTransfer.batchTransferERC20(address(noReturnToken), recipients, amounts, GAS_LIMIT);
 
         assertEq(totalAmount, 600);
         assertEq(noReturnToken.balanceOf(sender), 400);
@@ -151,7 +156,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 IBatchTransferErrors.ERC20InsufficientBalance.selector, address(token), sender, 600, 599
             )
         );
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
 
         assertEq(token.balanceOf(sender), 599);
         assertEq(token.balanceOf(recipient1), 0);
@@ -178,7 +183,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 599
             )
         );
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
 
         assertEq(token.balanceOf(sender), 1_000);
         assertEq(token.balanceOf(recipient1), 0);
@@ -201,7 +206,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 IBatchTransferErrors.ERC20InvalidReturn.selector, address(token), 0, recipient1, 100, keccak256(abi.encode(false)), 32
             )
         );
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
 
         assertEq(token.balanceOf(sender), 1_000);
         assertEq(token.balanceOf(recipient1), 0);
@@ -230,7 +235,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 _errorString("MOCK_RECIPIENT").length
             )
         );
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
 
         assertEq(token.balanceOf(sender), 1_000);
         assertEq(token.balanceOf(recipient1), 0);
@@ -254,7 +259,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 IBatchTransferErrors.ERC20InvalidReturn.selector, address(shortReturnToken), 0, recipient1, 100, keccak256(hex"01"), 1
             )
         );
-        batchTransfer.batchTransferERC20(address(shortReturnToken), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(shortReturnToken), recipients, amounts, GAS_LIMIT);
 
         assertEq(shortReturnToken.balanceOf(sender), 1_000);
         assertEq(shortReturnToken.balanceOf(recipient1), 0);
@@ -278,7 +283,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 _errorString("BROKEN_QUERY").length
             )
         );
-        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts, GAS_LIMIT);
     }
 
     function testBatchTransferERC20RevertsOnAllowanceQueryFailure() public {
@@ -299,7 +304,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 _errorString("BROKEN_QUERY").length
             )
         );
-        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts, GAS_LIMIT);
     }
 
     function testRevertsOnEmptyBalanceQueryReturn() public {
@@ -319,7 +324,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
                 0
             )
         );
-        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(brokenToken), recipients, amounts, GAS_LIMIT);
     }
 
     function testNativeBalances() public {
@@ -387,7 +392,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         token.approve(address(batchTransfer), recipientCount);
 
         vm.prank(sender);
-        uint256 totalAmount = batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        uint256 totalAmount = batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
 
         assertEq(totalAmount, recipientCount);
         assertEq(token.balanceOf(sender), 0);
@@ -411,10 +416,10 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         uint256[] memory amounts = new uint256[](0);
 
         vm.expectRevert(IBatchTransferErrors.EmptyBatch.selector);
-        batchTransfer.batchTransferNative(recipients, amounts);
+        batchTransfer.batchTransferNative(recipients, amounts, GAS_LIMIT);
 
         vm.expectRevert(IBatchTransferErrors.EmptyBatch.selector);
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
     }
 
     function testRevertsOnLengthMismatch() public {
@@ -424,7 +429,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         amounts[1] = 200;
 
         vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.ArrayLengthMismatch.selector, 3, 2));
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
     }
 
     function testRevertsOnZeroRecipient() public {
@@ -433,7 +438,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         uint256[] memory amounts = _amounts3(100, 200, 300);
 
         vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.ZeroRecipient.selector, 1));
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
     }
 
     function testRevertsOnZeroAmount() public {
@@ -441,7 +446,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         uint256[] memory amounts = _amounts3(100, 0, 300);
 
         vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.ZeroAmount.selector, 1));
-        batchTransfer.batchTransferERC20(address(token), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, GAS_LIMIT);
     }
 
     function testRevertsOnTokenNotContract() public {
@@ -449,7 +454,7 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
         uint256[] memory amounts = _amounts3(100, 200, 300);
 
         vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.TokenNotContract.selector, address(0)));
-        batchTransfer.batchTransferERC20(address(0), recipients, amounts);
+        batchTransfer.batchTransferERC20(address(0), recipients, amounts, GAS_LIMIT);
 
         vm.expectRevert(abi.encodeWithSelector(IBatchTransferErrors.TokenNotContract.selector, recipient1));
         batchTransfer.erc20Balances(recipient1, recipients);
@@ -475,5 +480,69 @@ contract BatchTransferTest is Test, IBatchTransferEvents {
 
     function _errorString(string memory reason) internal pure returns (bytes memory) {
         return abi.encodeWithSignature("Error(string)", reason);
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Caller-supplied gas limit
+    // ----------------------------------------------------------------------------------------
+
+    function testRevertsOnZeroGasLimitForNative() public {
+        address[] memory recipients = new address[](1);
+        recipients[0] = recipient1;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 1 ether;
+
+        vm.deal(sender, 1 ether);
+        vm.prank(sender);
+        vm.expectRevert(IBatchTransferErrors.ZeroGasLimit.selector);
+        batchTransfer.batchTransferNative{value: 1 ether}(recipients, amounts, 0);
+    }
+
+    function testRevertsOnZeroGasLimitForERC20() public {
+        address[] memory recipients = new address[](1);
+        recipients[0] = recipient1;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 100;
+
+        token.mint(sender, 1_000);
+        vm.prank(sender);
+        token.approve(address(batchTransfer), 100);
+
+        vm.prank(sender);
+        vm.expectRevert(IBatchTransferErrors.ZeroGasLimit.selector);
+        batchTransfer.batchTransferERC20(address(token), recipients, amounts, 0);
+    }
+
+    /// @dev The budget is the caller's, not a constant: a recipient that needs more than the limit must
+    /// fail, and the same recipient must succeed once the limit is raised. This is what makes the
+    /// parameter meaningful instead of decorative.
+    function testGasLimitIsActuallyApplied() public {
+        GasHungryRecipient hungry = new GasHungryRecipient();
+        address[] memory recipients = new address[](1);
+        recipients[0] = address(hungry);
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 1 ether;
+
+        vm.deal(sender, 2 ether);
+
+        vm.prank(sender);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IBatchTransferErrors.NativeTransferFailed.selector,
+                0,
+                address(hungry),
+                1 ether,
+                keccak256(""),
+                0
+            )
+        );
+        batchTransfer.batchTransferNative{value: 1 ether}(recipients, amounts, 5_000);
+
+        assertEq(hungry.received(), 0, "nothing arrived under the low limit");
+
+        vm.prank(sender);
+        batchTransfer.batchTransferNative{value: 1 ether}(recipients, amounts, 200_000);
+
+        assertEq(hungry.received(), 1 ether, "arrived once the limit was raised");
     }
 }

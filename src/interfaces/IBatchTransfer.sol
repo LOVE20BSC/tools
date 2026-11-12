@@ -23,6 +23,7 @@ interface IBatchTransferErrors {
     );
     error ZeroRecipient(uint256 index);
     error ZeroAmount(uint256 index);
+    error ZeroGasLimit();
     error NativeValueMismatch(
         uint256 expected,
         uint256 actual
@@ -80,16 +81,17 @@ interface IBatchTransferErrors {
 }
 
 interface IBatchTransfer is IBatchTransferEvents, IBatchTransferErrors {
-    function NATIVE_TRANSFER_GAS_LIMIT() external view returns (uint256);
-
-    function batchTransferNative(address[] calldata recipients, uint256[] calldata amounts)
+    function batchTransferNative(address[] calldata recipients, uint256[] calldata amounts, uint256 gasLimit)
         external
         payable
         returns (uint256 totalAmount);
 
-    function batchTransferERC20(address tokenAddress, address[] calldata recipients, uint256[] calldata amounts)
-        external
-        returns (uint256 totalAmount);
+    function batchTransferERC20(
+        address tokenAddress,
+        address[] calldata recipients,
+        uint256[] calldata amounts,
+        uint256 gasLimit
+    ) external returns (uint256 totalAmount);
 
     function nativeBalances(address[] calldata accounts) external view returns (uint256[] memory balances);
 
