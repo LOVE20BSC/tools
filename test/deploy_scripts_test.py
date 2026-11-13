@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """BatchTransfer deployment regression checks.
 
+The repository holds exactly one deployable tool, so every check here is about BatchTransfer's
+`script/deploy/` module and the network files it reads.
+
 Two halves, no network and no broadcast:
 
 - structural checks against the real repository (shared params.sh hash, per-network profiles,
-  script permissions, no hardcoded addresses, verifier opt-out list);
+  declared dependencies, script permissions, no hardcoded addresses, verifier opt-out list);
 - behavioural checks inside a throwaway project root, where fake cast/forge/osascript/mktemp
   executables log every call and let each failure path be exercised deterministically.
 
@@ -51,34 +54,15 @@ def network_dirs() -> list:
     return sorted(path for path in (repo_root() / "script/network").iterdir() if path.is_dir())
 
 
-# Address files copied verbatim from another repository (dev-standards §6.2). They are dependencies,
-# not modules of this repository: they have no matching <module>.params, are never written by a
-# tools deploy step, and must stay byte-identical to the producer's copy.
-CROSS_REPO_ADDRESS_FILES = {
-    "uniswapv2": "dex",
-}
-
-
 def tool_modules(directory: Path) -> list:
-    """Modules of one network directory: its own address files, i.e. the ones with a module file.
+    """Modules of one network directory: every addresses.<module>.params it carries.
 
-    tools is a multi-tool repository: the module name is the contract group, and the address file
-    name is the single source of truth for the module's parameter and address file names. A copied
-    cross-repository dependency carries no <module>.params and is filtered out here; it is checked
-    separately by cross_repo_address_files().
+    tools is a zero-dependency repository: every address file belongs to a module of this repository
+    and has a matching <module>.params next to it, so the file name alone is the module list. Adding
+    a tool means adding its pair of files; nothing here needs to know the tool's name.
     """
     return sorted(path.name[len("addresses."):-len(".params")]
-                  for path in directory.glob("addresses.*.params")
-                  if not dependency_address_file(path))
-
-
-def dependency_address_file(path: Path) -> bool:
-    """True for an addresses.<dependency>.params copied from another repository."""
-    name = path.name
-    if not (name.startswith("addresses.") and name.endswith(".params")):
-        return False
-    module = name[len("addresses."):-len(".params")]
-    return not (path.parent / f"{module}.params").is_file()
+                  for path in directory.glob("addresses.*.params"))
 
 
 def all_address_files(directory: Path) -> list:
@@ -153,8 +137,12 @@ def network_profiles() -> None:
         assert (directory / "network.params").is_file(), directory
         modules = tool_modules(directory)
         assert modules, f"{directory} declares no addresses.<module>.params"
+        # tools holds exactly one tool today; the assertion is on the set, not on the count, so
+        # adding a tool keeps working as long as it ships both files.
         assert "batch-transfer" in modules, (directory, modules)
         for module in modules:
+            # No copied dependency address file can exist here: tools is zero-dependency, so a
+            # missing <module>.params is a real error, not a cross-repository import.
             assert (directory / f"{module}.params").is_file(), (directory, module)
             address_file = directory / f"addresses.{module}.params"
             text = address_file.read_text()
@@ -169,37 +157,28 @@ def network_profiles() -> None:
             assert value != ZERO_ADDRESS, (address_file, "zero address is not a valid sentinel here")
 
 
-def cross_repo_address_files() -> None:
-    """Copied dependency address files stay byte-identical to the producer's copy.
+def dependencies_are_declared() -> None:
+    """Only submodules the source actually imports may be declared and remapped.
 
-    dev-standards §6.2: A depending on B copies B's addresses.<module>.params into A's network
-    directory, untouched. Hand-editing the copy breaks the whole point (B redeploys, A re-copies),
-    so the copy is pinned by a hash of the source file, and a stale copy fails here.
+    tools is a zero-dependency repository: every import is either local or `@forge-std/`. A declared
+    submodule or remapping that no source uses is dead weight that hides real dependencies in a
+    `.gitmodules` diff, so the two lists are checked against each other and against the imports.
     """
-    for network in network_dirs():
-        for module, producer in CROSS_REPO_ADDRESS_FILES.items():
-            copied = network / f"addresses.{module}.params"
-            assert copied.is_file(), f"{copied} is missing; copy it from {producer}"
-            assert not (network / f"{module}.params").is_file(), (
-                f"{copied} is a dependency copy and must not gain its own {module}.params")
-            # The producer's copy is only reachable in a workspace checkout; CI checks this
-            # repository out alone, where the sibling repository does not exist. The byte-for-byte
-            # comparison is therefore skipped when the producer is absent, but the structural
-            # assertions below always run - a hand-edited copy still fails on a key or format.
-            source = repo_root().parent / producer / "script/network" / network.name / copied.name
-            if source.is_file():
-                assert copied.read_bytes() == source.read_bytes(), (
-                    f"{copied} drifted from {source}; re-copy instead of editing")
-            else:
-                # A header line recording where the copy came from keeps the provenance visible
-                # where the workspace is not available to check it.
-                assert copied.read_text().startswith(("FACTORY_ADDRESS=", "#")), copied
-            keys = [key for key, _ in KEY_LINE.findall(copied.read_text())]
-            assert keys == ["FACTORY_ADDRESS", "ROUTER_ADDRESS"], (copied, keys)
-            for key, value in KEY_LINE.findall(copied.read_text()):
-                assert UPPER_SNAKE.fullmatch(key), (copied, key)
-                assert ADDRESS_VALUE.fullmatch(value.strip()), (copied, key, value)
-                assert value.strip() != ZERO_ADDRESS, (copied, key)
+    root = repo_root()
+    declared = sorted(re.findall(r'^\[submodule "lib/([^"]+)"\]',
+                                 (root / ".gitmodules").read_text(), re.MULTILINE))
+    # foundry.lock keys are repository-relative paths ("lib/forge-std"); compare without the prefix.
+    locked = sorted(key[len("lib/"):] for key in json.loads((root / "foundry.lock").read_text()))
+    assert declared == locked, (declared, locked)
+    # Foundry's own dependency, always present: forge-std is what the tests and deploy script import.
+    assert declared == ["forge-std"], declared
+    remaps = sorted(line for line in (root / "remappings.txt").read_text().splitlines() if line.strip())
+    assert remaps == ["@forge-std/=lib/forge-std/src/"], remaps
+    # And no source reaches for a remapping that is not declared: `auto_detect_remappings = false`.
+    for source in sorted((root / "src").rglob("*.sol")) + sorted((root / "test").rglob("*.sol")) \
+            + sorted((root / "script").rglob("*.sol")):
+        for imported in re.findall(r'import\s+\{[^}]*\}\s+from\s+"([^"]+)"', source.read_text()):
+            assert imported.startswith(("@forge-std/", "../", "./")), (source, imported)
 
 
 def network_params_keys() -> None:
@@ -245,10 +224,10 @@ def scripts_stay_within_bash_32() -> None:
 def e2e_script_structure() -> None:
     """Structural guard for `script/e2e/anvil_e2e.sh`.
 
-    The end-to-end script cannot run here — it needs anvil and a built `dex` checkout — so this only
-    pins the properties that a silent regression would break without any test noticing: the file is
-    executable, it parses under the shell that macOS ships, it drives the deploy entry points rather
-    than re-implementing deployment, and it restores the files it rewrites.
+    The end-to-end script cannot run here — it needs anvil — so this only pins the properties that a
+    silent regression would break without any test noticing: the file is executable, it parses under
+    the shell that macOS ships, it drives the deploy entry points rather than re-implementing
+    deployment, and it restores the files it rewrites.
 
     Three real defects reached a green run through this gap before it existed: a bash-4 expansion that
     made an assertion compare two empty strings, and a cleanup trap whose signal handler resumed the
@@ -264,7 +243,7 @@ def e2e_script_structure() -> None:
     # comment, which would prove nothing about the code path.
     text = code_lines(script.read_text())
     # Drives the real entry points instead of a parallel deployment implementation.
-    for entry in ("one_click_deploy_batch_transfer.sh", "one_click_deploy_uniswap_v2_zap.sh"):
+    for entry in ("one_click_deploy_batch_transfer.sh",):
         assert entry in text, f"{script} does not drive {entry}"
     # Restores every file it rewrites, including the network config it repoints.
     assert "BACKUP_DIR" in text and "network.params" in text, script
@@ -301,7 +280,7 @@ def scripts_have_shebang_and_exec_bit() -> None:
 
 def deploy_script_has_no_hardcoded_address() -> None:
     """Deployment addresses come from files only; the zero address is the sole allowed literal."""
-    for name in ("DeployBatchTransfer.s.sol", "DeployUniswapV2Zap.s.sol"):
+    for name in ("DeployBatchTransfer.s.sol",):
         source = (repo_root() / "script/deploy" / name).read_text()
         literals = set(ADDRESS_VALUE.findall(source))
         assert literals <= {ZERO_ADDRESS}, (name, sorted(literals))
@@ -325,41 +304,10 @@ def deploy_script_structure() -> None:
     assert "BATCH_TRANSFER_ADDRESS=" in source, "the summary line 11_deploy_batch_transfer.sh greps is missing"
 
 
-def uniswap_v2_zap_deploy_script_structure() -> None:
-    """Same §6.3 shape for the zap, plus: the Router is a file input, never a literal.
-
-    The zap's only constructor argument is the Router, deployed by `dex`. Reading it through
-    vm.envAddress("ROUTER_ADDRESS") is what keeps the copied dependency file the single source; a
-    literal or a second derivation would defeat dev-standards §6.2.
-    """
-    source = (repo_root() / "script/deploy/DeployUniswapV2Zap.s.sol").read_text()
-    for function in ("_loadConfig", "_validateConfig", "_validateDeployment"):
-        assert f"function {function}(" in source, function
-
-    body = source.index("function run()")
-    start = source.index("vm.startBroadcast()", body)
-    stop = source.index("vm.stopBroadcast()", body)
-    assert body < start < stop, "run() must broadcast between the two validation phases"
-    assert source.index("_validateConfig(config)", body) < start, "static checks must precede the broadcast"
-    assert source.index("_validateDeployment(", body) > stop, "the binding graph is read back after the broadcast"
-
-    # One constructor argument, read from the copied dependency file.
-    assert 'vm.envAddress("ROUTER_ADDRESS")' in source, "the Router must come from the dependency file"
-    assert "new UniswapV2Zap(config.router)" in source, "the constructor must take the configured Router"
-    # factory and WETH are derived from the Router, not configured separately (§5.4: fewer parameters).
-    assert 'vm.envAddress("FACTORY_ADDRESS")' not in source, "factory() is derived from the Router"
-    assert 'vm.envAddress("WETH_ADDRESS")' not in source, "wrappedNativeToken() is derived from the Router"
-    assert "UNISWAP_V2_ZAP_ADDRESS=" in source, "the summary line 12_deploy_uniswap_v2_zap.sh greps is missing"
-
-
 MODULES = {
     "batch-transfer": {
         "entrypoint": "one_click_deploy_batch_transfer.sh",
         "steps": ("11_deploy_batch_transfer.sh", "21_check_batch_transfer.sh", "31_verify_batch_transfer.sh"),
-    },
-    "uniswap-v2-zap": {
-        "entrypoint": "one_click_deploy_uniswap_v2_zap.sh",
-        "steps": ("12_deploy_uniswap_v2_zap.sh", "22_check_uniswap_v2_zap.sh", "32_verify_uniswap_v2_zap.sh"),
     },
 }
 
@@ -425,42 +373,9 @@ def fake_tool(tool: str, args: list) -> int:
             if os.environ.get("RPC_CODE_ERROR"):
                 return 1
             print(os.environ.get("MOCK_CODE", data["code"]))
-        elif args[0] == "call":
-            signature = args[2]
-            overrides = json.loads(os.environ.get("MOCK_CALL_OVERRIDES", "{}"))
-            failing = set(json.loads(os.environ.get("MOCK_CALL_FAILURES", "[]")))
-            if signature in overrides:
-                print(overrides[signature])
-            elif signature in {
-                "ROUTER()(address)",
-                "FACTORY()(address)",
-                "WRAPPED_NATIVE_TOKEN()(address)",
-                # The Router keeps Uniswap's own method names; only the zap's getters are frozen-value
-                # constants, so `factory()` here is the Router call and `FACTORY()` the zap getter.
-                "factory()(address)",
-                "WETH()(address)",
-            }:
-                if signature in failing:
-                    # Model a read that fails on chain: the scripts fall back to the ERROR sentinel.
-                    return 1
-                print(data["calls"][signature])
-            else:
-                raise AssertionError(args)
-        elif args[0] == "abi-encode":
-            if os.environ.get("ABI_ENCODE_FAIL"):
-                return 1
-            value = args[2]
-            assert ADDRESS_VALUE.fullmatch(value), value
-            print("0x" + "0" * 24 + value[2:].lower())
         else:
             raise AssertionError(args)
     elif tool == "forge":
-        if args[0] == "verify-contract" and len(args) > 2 and "src/UniswapV2Zap.sol:UniswapV2Zap" == args[2]:
-            if os.environ.get("VERIFY_FAIL"):
-                return 1
-            return 0
-        if args[0] == "script" and len(args) > 1 and "DeployUniswapV2Zap.s.sol" in args[1]:
-            return fake_uniswap_v2_zap_deploy(args, data)
         if args[0] == "script":
             # The contract has no constructor parameters: no --sig argument beyond run(), no
             # --constructor-args, and the keystore password only through a 600 temp file.
@@ -494,31 +409,6 @@ def fake_tool(tool: str, args: list) -> int:
             raise AssertionError(args)
     else:
         raise AssertionError(args)
-    return 0
-
-
-def fake_uniswap_v2_zap_deploy(args: list, data: dict) -> int:
-    """The zap deploy path: one constructor argument, read from the copied dependency file."""
-    assert args[1] == "script/deploy/DeployUniswapV2Zap.s.sol:DeployUniswapV2Zap", args
-    assert args[args.index("--sig") + 1] == "run()", args
-    assert "--password" not in args, "CREDENTIAL_IN_ARGV"
-    password_file = args[args.index("--password-file") + 1] if "--password-file" in args else None
-    if not password_file or not Path(password_file).is_file():
-        print("PASSWORD_FILE_MISSING", file=sys.stderr)
-    else:
-        mode = os.stat(password_file).st_mode & 0o777
-        print(f"PASSWORD_SHA={hashlib.sha256(Path(password_file).read_bytes()).hexdigest()}", file=sys.stderr)
-        print(f"PASSWORD_MODE={mode:o}", file=sys.stderr)
-    if os.environ.get("DEPLOY_FAIL"):
-        return 1
-    broadcast = os.environ.get("MOCK_BROADCAST")
-    if broadcast and Path(broadcast).exists():
-        artifact = json.loads(Path(broadcast).read_text())
-        artifact["timestamp"] = 0 if os.environ.get("STALE_BROADCAST") else int(time.time() * 1000)
-        Path(broadcast).write_text(json.dumps(artifact, indent=2))
-    if not os.environ.get("OMIT_ADDRESS"):
-        print("\n=== Deployment Summary ===")
-        print("UNISWAP_V2_ZAP_ADDRESS= " + data["address"])
     return 0
 
 
@@ -752,272 +642,21 @@ def behavioural_checks() -> int:
     return checks
 
 
-def build_fake_environment(root: Path):
-    """Stub cast/forge/osascript/mktemp plus the shared env dict, for one throwaway root."""
-    bin_dir = root / "bin"
-    bin_dir.mkdir()
-    for tool in ("cast", "forge", "osascript", "mktemp"):
-        stub = bin_dir / tool
-        stub.write_text("#!/bin/sh\nexec " + shlex.quote(sys.executable) + " "
-                        + shlex.quote(str(Path(__file__).resolve())) + " --fake " + tool + ' "$@"\n')
-        stub.chmod(0o755)
-    tmp_dir = root / "tmp"
-    tmp_dir.mkdir()
-    return bin_dir, tmp_dir
-
-
-def zap_behavioural_checks() -> int:
-    """Deploy / check / verify behaviour of the UniswapV2Zap scripts.
-
-    Same fake-tool harness as the BatchTransfer half, with the two differences the zap module
-    introduces: the constructor takes the Router from the copied dex address file, and the check
-    step re-derives factory()/WETH() from the Router instead of trusting a recorded value.
-    """
-    checks = 0
-    router = "0x" + "9f" * 20
-    factory = "0x" + "e7" * 20
-    weth = "0x" + "cc" * 20
-    deployed = "0x" + "ab" * 20
-
-    with tempfile.TemporaryDirectory(prefix="tools-zap-deploy-test-") as directory:
-        root = Path(directory)
-        deploy = root / "script/deploy"
-        shutil.copytree(repo_root() / "script/deploy", deploy)
-        network = root / "script/network/test"
-        network.mkdir(parents=True)
-        (root / "script/network/verifier.params").write_text(
-            "ETHERSCAN_VERIFIER_URL=https://api.etherscan.io/v2/api\nVERIFY_SKIP_CHAIN_IDS=31337\n")
-        bin_dir, tmp_dir = build_fake_environment(root)
-
-        data_path, log_path = root / "rpc.json", root / "calls.log"
-        data_path.write_text(json.dumps({
-            "chain_id": "31337",
-            "address": deployed,
-            "code": "0x" + "60" * 100,
-            "calls": {
-                "ROUTER()(address)": router,
-                "FACTORY()(address)": factory,
-                "WRAPPED_NATIVE_TOKEN()(address)": weth,
-                "factory()(address)": factory,
-                "WETH()(address)": weth,
-            },
-        }))
-        network.joinpath("network.params").write_text("CHAIN_ID=31337\nRPC_URL=http://invalid.local\n")
-        network.joinpath("uniswap-v2-zap.params").write_text("# UniswapV2Zap reads ROUTER_ADDRESS from the copied dex file\n")
-        dependency = network / "addresses.uniswapv2.params"
-        dependency.write_text(f"FACTORY_ADDRESS={factory}\nROUTER_ADDRESS={router}\n")
-        address_file = network / "addresses.uniswap-v2-zap.params"
-        address_file.write_text("UNISWAP_V2_ZAP_ADDRESS=\n")
-        broadcast = root / "broadcast/DeployUniswapV2Zap.s.sol/31337/run-latest.json"
-        broadcast.parent.mkdir(parents=True)
-        broadcast.write_text(json.dumps({"transactions": [], "timestamp": 0}, indent=2))
-        base = {"PATH": str(bin_dir) + os.pathsep + os.environ["PATH"], "MOCK_DATA": str(data_path),
-                "MOCK_LOG": str(log_path), "MOCK_BROADCAST": str(broadcast), "MOCK_TMP": str(tmp_dir)}
-
-        def run(script, success=True, **extra):
-            nonlocal checks
-            log_path.write_text("")
-            result = subprocess.run(["bash", str(deploy / script), "test"], env={**base, **extra},
-                                    cwd=root, text=True, capture_output=True)
-            output = result.stdout + result.stderr
-            assert (result.returncode == 0) == success, (script, extra, result.stdout, result.stderr)
-            assert SECRET_PASSWORD not in output, output
-            for marker in ("CREDENTIAL_IN_ARGV", "PASSWORD_FILE_MISSING"):
-                assert marker not in output, (marker, output)
-            log = [json.loads(line) for line in log_path.read_text().splitlines()]
-            for call in log:
-                if call[:2] == ["forge", "script"] and "--password-file" in call:
-                    assert not Path(call[call.index("--password-file") + 1]).exists(), call
-            checks += 1
-            return result, log
-
-        network.joinpath(".account").write_text(
-            "KEYSTORE_ACCOUNT=test-keystore\nACCOUNT_ADDRESS=0x" + "f5" * 20 + "\n")
-
-        def collect_kept_log(output: str) -> None:
-            assert "Deployment log:" in output, output
-            kept_log = Path(output.split("Deployment log:", 1)[1].splitlines()[0].strip())
-            assert kept_log.exists(), kept_log
-            kept_log.unlink()
-
-        # 1. The check refuses an empty sentinel before any chain call.
-        result, log = run("22_check_uniswap_v2_zap.sh", False)
-        output = result.stdout + result.stderr
-        assert "missing or invalid" in output, output
-        assert "run one_click_deploy_uniswap_v2_zap.sh first" in output, output
-        assert not any(call[:2] == ["cast", "call"] for call in log), log
-
-        # 2. Zero address and a renamed key are rejected the same way.
-        address_file.write_text(f"UNISWAP_V2_ZAP_ADDRESS={ZERO_ADDRESS}\n")
-        result, _ = run("22_check_uniswap_v2_zap.sh", False)
-        assert "missing or invalid" in result.stdout + result.stderr, result.stdout + result.stderr
-        address_file.write_text(f"UNISWAPV2ZAP_ADDRESS={deployed}\n")
-        result, _ = run("22_check_uniswap_v2_zap.sh", False)
-        assert "key set mismatch" in result.stdout + result.stderr, result.stdout + result.stderr
-        # The copied dependency's key set is asserted too: a renamed ROUTER_ADDRESS must not pass.
-        dependency.write_text(f"FACTORY_ADDRESS={factory}\nUNISWAP_V2_ROUTER_ADDRESS={router}\n")
-        address_file.write_text(f"UNISWAP_V2_ZAP_ADDRESS={deployed}\n")
-        result, _ = run("22_check_uniswap_v2_zap.sh", False)
-        assert "key set mismatch" in result.stdout + result.stderr, result.stdout + result.stderr
-        dependency.write_text(f"FACTORY_ADDRESS={factory}\nROUTER_ADDRESS={router}\n")
-
-        # 3. Happy path: the three getters are re-derived, and router() is compared with the copy.
-        result, log = run("22_check_uniswap_v2_zap.sh")
-        output = result.stdout + result.stderr
-        assert "UniswapV2Zap verified" in output, output
-        called = {call[3] for call in log if call[:2] == ["cast", "call"]}
-        assert {
-            "ROUTER()(address)",
-            "FACTORY()(address)",
-            "WRAPPED_NATIVE_TOKEN()(address)",
-            "factory()(address)",
-            "WETH()(address)",
-        } <= called, called
-
-        # 4. Each on-chain mismatch fails on its own.
-        result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_OVERRIDES=json.dumps({"ROUTER()(address)": "0x" + "11" * 20}))
-        assert "ROUTER()" in result.stdout + result.stderr, result.stdout + result.stderr
-        result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_OVERRIDES=json.dumps({"FACTORY()(address)": "0x" + "22" * 20}))
-        assert "FACTORY()" in result.stdout + result.stderr, result.stdout + result.stderr
-        result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_OVERRIDES=json.dumps({"WRAPPED_NATIVE_TOKEN()(address)": "0x" + "33" * 20}))
-        assert "WRAPPED_NATIVE_TOKEN()" in result.stdout + result.stderr, result.stdout + result.stderr
-        result, _ = run("22_check_uniswap_v2_zap.sh", False, RPC_CODE_ERROR="1")
-        assert "not deployed" in result.stdout + result.stderr, result.stdout + result.stderr
-        result, _ = run("22_check_uniswap_v2_zap.sh", False, RPC_CHAIN="56")
-        assert "chain ID" in result.stdout + result.stderr, result.stdout + result.stderr
-
-        # 4b. Both reads failing must not compare equal to each other. A run where the zap and the
-        # Router are both unreadable is exactly the "wrong zap deployed" case this step exists to
-        # catch, so the ERROR sentinel has to be rejected before the equality check.
-        result, _ = run("22_check_uniswap_v2_zap.sh", False,
-                        MOCK_CALL_FAILURES=json.dumps(
-                            ["WRAPPED_NATIVE_TOKEN()(address)", "WETH()(address)"]))
-        assert "WRAPPED_NATIVE_TOKEN()" in result.stdout + result.stderr, result.stdout + result.stderr
-        assert "could not be read" in result.stdout + result.stderr, result.stdout + result.stderr
-        assert "verification(s) failed" in result.stdout + result.stderr, result.stdout + result.stderr
-
-        # 5. A missing copied dependency file fails loudly instead of deploying against nothing.
-        dependency.unlink()
-        result, _ = run("22_check_uniswap_v2_zap.sh", False)
-        assert "addresses.uniswapv2.params" in result.stdout + result.stderr, result.stdout + result.stderr
-        result, _ = run("12_deploy_uniswap_v2_zap.sh", False)
-        assert "addresses.uniswapv2.params" in result.stdout + result.stderr, result.stdout + result.stderr
-        dependency.write_text(f"FACTORY_ADDRESS={factory}\nROUTER_ADDRESS={router}\n")
-
-        # 6. A zero Router in the dependency file is refused before broadcasting.
-        dependency.write_text(f"FACTORY_ADDRESS={factory}\nROUTER_ADDRESS={ZERO_ADDRESS}\n")
-        result, log = run("12_deploy_uniswap_v2_zap.sh", False)
-        output = result.stdout + result.stderr
-        assert "ROUTER_ADDRESS is missing or invalid" in output, output
-        assert not any(call[:2] == ["forge", "script"] for call in log), log
-        dependency.write_text(f"FACTORY_ADDRESS={factory}\nROUTER_ADDRESS={router}\n")
-
-        # 7. Deploy: writes the address file atomically, never passes --password, removes the temp file.
-        result, log = run("12_deploy_uniswap_v2_zap.sh")
-        output = result.stdout + result.stderr
-        assert address_file.read_text() == f"UNISWAP_V2_ZAP_ADDRESS={deployed}\n", address_file.read_text()
-        command = next(call for call in log if call[:2] == ["forge", "script"])
-        assert command[2] == "script/deploy/DeployUniswapV2Zap.s.sol:DeployUniswapV2Zap", command
-        assert command[command.index("--chain-id") + 1] == "31337", command
-        assert command[command.index("--account") + 1] == "test-keystore", command
-        assert "--unlocked" not in command and "--private-key" not in command, command
-        assert "PASSWORD_SHA=" + hashlib.sha256(b"test-password").hexdigest() in output, output
-        assert "PASSWORD_MODE=600" in output, output
-
-        # 8. Stale broadcast and a missing address line leave the saved record alone.
-        saved = address_file.read_text()
-        result, _ = run("12_deploy_uniswap_v2_zap.sh", False, STALE_BROADCAST="1")
-        output = result.stdout + result.stderr
-        assert "was not updated by this deployment" in output, output
-        collect_kept_log(output)
-        assert address_file.read_text() == saved, address_file.read_text()
-        result, _ = run("12_deploy_uniswap_v2_zap.sh", False, OMIT_ADDRESS="1")
-        output = result.stdout + result.stderr
-        assert "UNISWAP_V2_ZAP_ADDRESS" in output, output
-        collect_kept_log(output)
-        assert address_file.read_text() == saved, address_file.read_text()
-        result, _ = run("12_deploy_uniswap_v2_zap.sh", False, DEPLOY_FAIL="1")
-        output = result.stdout + result.stderr
-        assert "may already be on chain" in output, output
-        collect_kept_log(output)
-        assert address_file.read_text() == saved, address_file.read_text()
-
-        # 9. Verify: skipped on the opt-out chain, and the constructor argument is the copied Router.
-        result, log = run("32_verify_uniswap_v2_zap.sh")
-        assert "Skip: source verification" in result.stdout + result.stderr, result.stdout + result.stderr
-        assert not any(call[:2] == ["forge", "verify-contract"] for call in log), log
-
-        (root / "script/network/verifier.params").write_text(
-            "ETHERSCAN_VERIFIER_URL=https://api.etherscan.io/v2/api\nVERIFY_SKIP_CHAIN_IDS=\n")
-        network.joinpath("network.params").write_text(
-            "CHAIN_ID=31337\nRPC_URL=http://invalid.local\nETHERSCAN_API_KEY=test-key\n")
-        _, log = run("32_verify_uniswap_v2_zap.sh")
-        verify_calls = [call for call in log if call[:2] == ["forge", "verify-contract"]]
-        assert len(verify_calls) == 1, log
-        verify = verify_calls[0]
-        assert verify[2] == deployed, verify
-        assert verify[3] == "src/UniswapV2Zap.sol:UniswapV2Zap", verify
-        # The zap's constructor takes the Router: a verify without --constructor-args would publish
-        # source that does not reproduce the deployed bytecode.
-        assert "--constructor-args" in verify, verify
-        assert verify[verify.index("--constructor-args") + 1].lower().endswith(router[2:].lower()), verify
-        abi_calls = [call for call in log if call[:2] == ["cast", "abi-encode"]]
-        assert len(abi_calls) == 1, log
-        assert abi_calls[0][2] == "constructor(address)", abi_calls[0]
-        assert abi_calls[0][3] == router, abi_calls[0]
-
-        # 10. A failing ABI encode or a failing verification propagates.
-        result, _ = run("32_verify_uniswap_v2_zap.sh", False, ABI_ENCODE_FAIL="1")
-        run("32_verify_uniswap_v2_zap.sh", False, VERIFY_FAIL="1")
-
-        # 11. Without an API key no verification request is sent.
-        network.joinpath("network.params").write_text("CHAIN_ID=31337\nRPC_URL=http://invalid.local\n")
-        result, log = run("32_verify_uniswap_v2_zap.sh", False)
-        assert "ETHERSCAN_API_KEY" in result.stdout + result.stderr, result.stdout + result.stderr
-        assert not any(call[:2] == ["forge", "verify-contract"] for call in log), log
-
-        # 12. Entrypoint restores the previous address when the post-deploy check fails, and its happy
-        #     path deploys, checks and skips verification on chain 31337.
-        (root / "script/network/verifier.params").write_text(
-            "ETHERSCAN_VERIFIER_URL=https://api.etherscan.io/v2/api\nVERIFY_SKIP_CHAIN_IDS=31337\n")
-        address_file.write_text("# previous deployment\n")
-        for extra in ({"RPC_CHAIN": "56"}, {"DEPLOY_FAIL": "1"}):
-            result, _ = run("one_click_deploy_uniswap_v2_zap.sh", False, **extra)
-            assert address_file.read_text() == "# previous deployment\n", address_file.read_text()
-            if "Deployment log:" in result.stdout + result.stderr:
-                collect_kept_log(result.stdout + result.stderr)
-        result, log = run("one_click_deploy_uniswap_v2_zap.sh")
-        output = result.stdout + result.stderr
-        assert address_file.read_text() == f"UNISWAP_V2_ZAP_ADDRESS={deployed}\n", address_file.read_text()
-        assert "Skip: source verification" in output, output
-        assert "Deployment completed" in output, output
-
-        # 13. No temp file survives.
-        assert not list(tmp_dir.iterdir()), list(tmp_dir.iterdir())
-
-    return checks
-
-
 def main() -> None:
     params_shared_copy()
     params_loader_cases()
     params_unset_coverage()
     network_profiles()
-    cross_repo_address_files()
+    dependencies_are_declared()
     network_params_keys()
     scripts_have_shebang_and_exec_bit()
     scripts_stay_within_bash_32()
     e2e_script_structure()
     deploy_script_has_no_hardcoded_address()
     deploy_script_structure()
-    uniswap_v2_zap_deploy_script_structure()
     entrypoint_is_orchestration_only()
     verifier_skip_never_production()
     checks = behavioural_checks()
-    checks += zap_behavioural_checks()
     print(f"Passed {checks} isolated deployment checks (no network calls or broadcasts).")
 
 

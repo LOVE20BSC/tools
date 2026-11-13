@@ -1,24 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end check for every tool in this repository against a throwaway anvil chain.
+# End-to-end check for BatchTransfer against a throwaway anvil chain.
 #
 # What it does, in order:
 #   1. verifies the toolchain and the keystore `.account` points at;
-#   2. starts a fresh anvil and deploys the Uniswap V2 stack it needs (WETH9, Factory, Router02)
-#      from `dex`'s build artifacts;
-#   3. copies that stack's address file into `script/network/anvil31337_dev/` the same way a real
-#      run would (dev-standards §6.2), then runs each tool's own `one_click_deploy_<tool>.sh`;
-#   4. exercises both tools on chain: a batch native transfer, a `zapToken`, a `zapNativeToken`,
-#      the "the zap keeps nothing" invariant, and two custom-error selectors;
-#   5. restores the address files and stops anvil, whether the run passed or failed.
+#   2. starts a fresh anvil;
+#   3. deploys the contract through its own `one_click_deploy_batch_transfer.sh`;
+#   4. exercises it on chain: a real batch native transfer with per-recipient balances checked, a
+#      batch ERC20 transfer against a token deployed here, and two custom-error selectors;
+#   5. restores the files it rewrote and stops anvil, whether the run passed or failed.
 #
 # It deliberately drives the scripts in `script/deploy/` rather than re-implementing them: the
-# point is to prove that path works, not to work around it.
+# point is to prove that path works, not to work around it. tools is a zero-dependency repository,
+# so nothing outside this checkout has to be built first.
 #
 # Requirements:
-#   - anvil, cast, forge on PATH (Foundry 1.8.1+);
-#   - a sibling `dex` checkout built with `make build` (override with LOVE20_DEX_DIR);
+#   - anvil, cast, forge, python3 on PATH (Foundry 1.8.1+);
 #   - a keystore configured in script/network/anvil31337_dev/.account. See README.md.
 #
 # Usage: script/e2e/anvil_e2e.sh [--keep]
@@ -29,15 +27,14 @@ TOOLS_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 NETWORK="anvil31337_dev"
 NETWORK_DIR="$TOOLS_ROOT/script/network/$NETWORK"
-DEX_DIR="${LOVE20_DEX_DIR:-$TOOLS_ROOT/../dex}"
 E2E_PORT="${E2E_PORT:-8545}"
 RPC_URL="http://127.0.0.1:$E2E_PORT"
 CHAIN_ID=31337
 
 # Anvil's first default account. Public knowledge, local chain only - this is what `anvil` prints
-# on startup, not a secret. It is used solely to deploy the Uniswap V2 stack, so that deployment
-# does not depend on the operator's keystore; the tools themselves are deployed through the
-# keystore path the production scripts use.
+# on startup, not a secret. It is used solely to deploy test fixtures (a plain ERC20) so that step
+# does not depend on the operator's keystore; BatchTransfer itself is deployed and called through
+# the keystore path the production scripts use.
 ANVIL_DEFAULT_KEY="${E2E_ANVIL_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}"
 
 # Bound every RPC call. `cast` waits indefinitely by default, and an anvil that has bound its port
@@ -96,6 +93,14 @@ assert_contains() {
     esac
 }
 
+# uint_of <cast-call-output>
+# `cast call` prints a uint256 in decimal with an optional human-readable marker, e.g.
+# "7000000000000000000 [7e18]". Comparisons need the bare decimal, otherwise every balance check
+# would fail against an identical-looking number. The marker is presentation only.
+uint_of() {
+    printf '%s' "${1%% \[*}"
+}
+
 # --- cleanup ----------------------------------------------------------------------------------
 
 # Best effort throughout: `set -e` is still in force inside a trap, so a single failed `cp` would
@@ -149,8 +154,10 @@ json_field() {
 }
 
 # deploy_from_artifact <artifact-json> [<ctor-sig> <arg>...]
-# Echoes the deployed address. `cast create` needs the connection flags before `--create`, so they
-# go first; constructor arguments are appended to the bytecode as ABI-encoded words.
+# Echoes the deployed address. `cast send --create` needs the connection flags before `--create`, so
+# they go first; constructor arguments are appended to the bytecode as ABI-encoded words. Only used
+# for test fixtures (the ERC20 below), never for BatchTransfer itself - that goes through
+# `one_click_deploy_batch_transfer.sh`, which is the path under test.
 deploy_from_artifact() {
     local artifact="$1"; shift
     local bytecode args="" tx receipt
@@ -213,16 +220,6 @@ set +a
     || die "KEYSTORE_PASSWORD empty - set it in .account for a non-interactive run"
 pass "keystore account configured ($KEYSTORE_ACCOUNT / $ACCOUNT_ADDRESS)"
 
-[ -d "$DEX_DIR" ] || die "dex checkout not found at $DEX_DIR - set LOVE20_DEX_DIR"
-WETH_ART="$DEX_DIR/build/periphery/WETH9.sol/WETH9.json"
-FACTORY_ART="$DEX_DIR/build/core/UniswapV2Factory.sol/UniswapV2Factory.json"
-ROUTER_ART="$DEX_DIR/build/periphery/UniswapV2Router02.sol/UniswapV2Router02.json"
-TOKEN_ART="$DEX_DIR/build/core/ERC20.sol/ERC20.json"
-for art in "$WETH_ART" "$FACTORY_ART" "$ROUTER_ART" "$TOKEN_ART"; do
-    [ -f "$art" ] || die "missing dex artifact: $art (run 'make build' in $DEX_DIR)"
-done
-pass "dex build artifacts present"
-
 if cast chain-id --rpc-url "$RPC_URL" --rpc-timeout 2 >/dev/null 2>&1; then
     die "something is already listening on $RPC_URL - stop it or set E2E_PORT"
 fi
@@ -235,9 +232,9 @@ for f in "$NETWORK_DIR"/addresses.*.params "$NETWORK_DIR/network.params"; do
 done
 pass "address and network files backed up"
 
-# --- chain and Uniswap stack ------------------------------------------------------------------
+# --- chain ------------------------------------------------------------------------------------
 
-step "2. Fresh anvil + Uniswap V2 stack"
+step "2. Fresh anvil"
 
 anvil --chain-id "$CHAIN_ID" --port "$E2E_PORT" --silent >/dev/null 2>&1 &
 ANVIL_PID=$!
@@ -250,8 +247,8 @@ assert_eq "chain is empty at block 0" "0" "$(cast block-number --rpc-url "$RPC_U
 
 # The deploy scripts read RPC_URL from network.params and deliberately ignore the environment
 # (dev-standards §6.2: values come from files only), so pointing only this script at E2E_PORT would
-# leave the dependency stack on one port and the tools on another -- with a chain-ID match the
-# tools would silently deploy to whichever chain happens to sit on 8545.
+# leave the tools on another port -- with a chain-ID match they would silently deploy to whichever
+# chain happens to sit on 8545.
 if grep -q '^RPC_URL=' "$NETWORK_DIR/network.params"; then
     sed -i.bak "s|^RPC_URL=.*|RPC_URL=$RPC_URL|" "$NETWORK_DIR/network.params" && rm -f "$NETWORK_DIR/network.params.bak"
 else
@@ -259,22 +256,7 @@ else
 fi
 pass "network.params RPC_URL points at $RPC_URL"
 
-WETH=$(deploy_from_artifact "$WETH_ART"); pass "WETH9 deployed at $WETH"
-FACTORY=$(deploy_from_artifact "$FACTORY_ART" "constructor(address)" "$ACCOUNT_ADDRESS")
-pass "UniswapV2Factory deployed at $FACTORY"
-ROUTER=$(deploy_from_artifact "$ROUTER_ART" "constructor(address,address)" "$FACTORY" "$WETH")
-pass "UniswapV2Router02 deployed at $ROUTER"
-
-assert_addr_eq "router.factory() is the factory" "$FACTORY" "$(cast call "$ROUTER" 'factory()(address)' --rpc-url "$RPC_URL")"
-assert_addr_eq "router.WETH() is the WETH" "$WETH" "$(cast call "$ROUTER" 'WETH()(address)' --rpc-url "$RPC_URL")"
-
-# The dependency arrives the way a real run delivers it: a copy of dex's own address file, never a
-# hand-edited merge (dev-standards §6.2).
-printf 'FACTORY_ADDRESS=%s\nROUTER_ADDRESS=%s\n' "$FACTORY" "$ROUTER" \
-    > "$NETWORK_DIR/addresses.uniswapv2.params"
-pass "addresses.uniswapv2.params written from the fresh deployment"
-
-# --- deploy both tools through their own scripts ----------------------------------------------
+# --- deploy through its own script ------------------------------------------------------------
 
 step "3. Deploy through script/deploy/"
 
@@ -285,24 +267,15 @@ else
     DEPLOY_FAILED=1
 fi
 
-if "$TOOLS_ROOT/script/deploy/one_click_deploy_uniswap_v2_zap.sh" "$NETWORK"; then
-    pass "one_click_deploy_uniswap_v2_zap.sh"
-else
-    fail "one_click_deploy_uniswap_v2_zap.sh"
-    DEPLOY_FAILED=1
-fi
-
 # Only a deployment failure blocks the on-chain checks; a failed assertion above must not hide them.
 [ "$DEPLOY_FAILED" -eq 0 ] || die "deployment failed, skipping the on-chain checks"
 
 BT=$(sed -n 's/^BATCH_TRANSFER_ADDRESS=//p' "$NETWORK_DIR/addresses.batch-transfer.params")
-ZAP=$(sed -n 's/^UNISWAP_V2_ZAP_ADDRESS=//p' "$NETWORK_DIR/addresses.uniswap-v2-zap.params")
 [ -n "$BT" ] || die "BATCH_TRANSFER_ADDRESS not written"
-[ -n "$ZAP" ] || die "UNISWAP_V2_ZAP_ADDRESS not written"
 
 # --- on-chain behaviour -----------------------------------------------------------------------
 
-step "4. BatchTransfer on chain"
+step "4. BatchTransfer on chain: native batch"
 
 R1=0x000000000000000000000000000000000000A001
 R2=0x000000000000000000000000000000000000A002
@@ -314,65 +287,55 @@ if send_tool "$BT" "batchTransferNative(address[],uint256[],uint256)" \
 else
     fail "batchTransferNative reverted"
 fi
-assert_eq "recipient 1 balance" "1000000000000000000" "$(cast balance "$R1" --rpc-url "$RPC_URL")"
-assert_eq "recipient 2 balance" "2000000000000000000" "$(cast balance "$R2" --rpc-url "$RPC_URL")"
-assert_eq "recipient 3 balance" "3000000000000000000" "$(cast balance "$R3" --rpc-url "$RPC_URL")"
+assert_eq "recipient 1 balance" "1000000000000000000" "$(uint_of "$(cast balance "$R1" --rpc-url "$RPC_URL")")"
+assert_eq "recipient 2 balance" "2000000000000000000" "$(uint_of "$(cast balance "$R2" --rpc-url "$RPC_URL")")"
+assert_eq "recipient 3 balance" "3000000000000000000" "$(uint_of "$(cast balance "$R3" --rpc-url "$RPC_URL")")"
+# The whole msg.value left the contract in the same transaction: that is the "no custody" promise.
+assert_eq "batch contract holds no native value" "0" "$(uint_of "$(cast balance "$BT" --rpc-url "$RPC_URL")")"
 
-step "5. UniswapV2Zap on chain"
+step "5. BatchTransfer on chain: ERC20 batch"
 
-TOKEN=$(deploy_from_artifact "$TOKEN_ART" "constructor(uint256)" 1000000000000000000000000)
+# The ERC20 branch needs a real token. tools is zero-dependency, so there is nothing to import: the
+# token deployed here is the repository's own test mock, taken from the build output that
+# `forge build` already produces (test sources are compiled by default). That keeps this script
+# self-contained and adds no fixture contract just for the e2e run.
+TOKEN_ART="$TOOLS_ROOT/out/BatchTransferMocks.sol/MockERC20.json"
+[ -f "$TOKEN_ART" ] || die "missing build artifact: $TOKEN_ART (run 'forge build' first)"
+TOKEN=$(deploy_from_artifact "$TOKEN_ART")
 pass "test ERC20 deployed at $TOKEN"
 
-send_tool "$TOKEN" "approve(address,uint256)" "$ZAP" 500000000000000000000 >/dev/null 2>&1 || true
-send_tool "$WETH" "deposit()" --value 100ether >/dev/null 2>&1 || true
-send_tool "$WETH" "approve(address,uint256)" "$ZAP" 100000000000000000000 >/dev/null 2>&1 || true
+D1=0x000000000000000000000000000000000000B001
+D2=0x000000000000000000000000000000000000B002
+send_tool "$TOKEN" "mint(address,uint256)" "$ACCOUNT_ADDRESS" 20000000000000000000 >/dev/null 2>&1 \
+    || die "could not mint the test ERC20"
+send_tool "$TOKEN" "approve(address,uint256)" "$BT" 20000000000000000000 >/dev/null 2>&1 \
+    || die "could not approve the test ERC20"
+pass "test ERC20 minted and approved"
 
-DEADLINE=$(($(date +%s) + 3600))
-if send_tool "$ZAP" "zapToken((address,address,uint256,uint256,uint256,uint256,uint256,address,uint256))" \
-        "($TOKEN,$WETH,100000000000000000000,100000000000000000000,99000000000000000000,99000000000000000000,90000000000000000000,$ACCOUNT_ADDRESS,$DEADLINE)" \
-        >/dev/null 2>&1; then
-    pass "zapToken executed"
+if send_tool "$BT" "batchTransferERC20(address,address[],uint256[],uint256)" \
+        "$TOKEN" "[$D1,$D2]" "[7000000000000000000,8000000000000000000]" 50000 >/dev/null 2>&1; then
+    pass "batchTransferERC20 executed"
 else
-    fail "zapToken reverted"
+    fail "batchTransferERC20 reverted"
 fi
-
-PAIR=$(cast call "$FACTORY" 'getPair(address,address)(address)' "$TOKEN" "$WETH" --rpc-url "$RPC_URL")
-[ "$PAIR" != "0x0000000000000000000000000000000000000000" ] \
-    && pass "pair created at $PAIR" || fail "pair was not created"
-
-LP_SUPPLY=$(cast call "$PAIR" 'totalSupply()(uint256)' --rpc-url "$RPC_URL")
-[ "$LP_SUPPLY" != "0" ] && pass "LP supply is non-zero" || fail "LP supply is zero"
-
-# The zap must never end a call holding anything: that is the whole "no custody" promise.
-assert_eq "zap holds no token after zapToken" "0" "$(cast call "$TOKEN" 'balanceOf(address)(uint256)' "$ZAP" --rpc-url "$RPC_URL")"
-assert_eq "zap holds no WETH after zapToken" "0" "$(cast call "$WETH" 'balanceOf(address)(uint256)' "$ZAP" --rpc-url "$RPC_URL")"
-assert_eq "zap holds no LP after zapToken" "0" "$(cast call "$PAIR" 'balanceOf(address)(uint256)' "$ZAP" --rpc-url "$RPC_URL")"
-
-# A second entry point, with a ratio that matches the 1:1 pool so the router's own slippage check
-# does not fire.
-if send_tool "$ZAP" "zapNativeToken(address,uint256,uint256,uint256,uint256,address,bool,uint256)" \
-        "$TOKEN" 1000000000000000000 0 0 0 "$ACCOUNT_ADDRESS" true "$DEADLINE" --value 1ether >/dev/null 2>&1; then
-    pass "zapNativeToken executed"
-else
-    fail "zapNativeToken reverted"
-fi
-assert_eq "zap holds no token after zapNativeToken" "0" "$(cast call "$TOKEN" 'balanceOf(address)(uint256)' "$ZAP" --rpc-url "$RPC_URL")"
-assert_eq "zap holds no WETH after zapNativeToken" "0" "$(cast call "$WETH" 'balanceOf(address)(uint256)' "$ZAP" --rpc-url "$RPC_URL")"
+assert_eq "token recipient 1 balance" "7000000000000000000" \
+    "$(uint_of "$(cast call "$TOKEN" 'balanceOf(address)(uint256)' "$D1" --rpc-url "$RPC_URL")")"
+assert_eq "token recipient 2 balance" "8000000000000000000" \
+    "$(uint_of "$(cast call "$TOKEN" 'balanceOf(address)(uint256)' "$D2" --rpc-url "$RPC_URL")")"
+assert_eq "batch contract holds no tokens" "0" \
+    "$(uint_of "$(cast call "$TOKEN" 'balanceOf(address)(uint256)' "$BT" --rpc-url "$RPC_URL")")"
 
 step "6. Custom-error selectors"
 
-# The remediation moved these selectors; a regression would silently ship a different revert.
-ZERO_INPUTS_EXPECTED=0x2896991c
-ZERO_INPUTS_ACTUAL=$(cast call "$ZAP" \
-    "zapToken((address,address,uint256,uint256,uint256,uint256,uint256,address,uint256))" \
-    "($TOKEN,$WETH,0,0,0,0,0,$ACCOUNT_ADDRESS,$DEADLINE)" --rpc-url "$RPC_URL" 2>&1 \
-    | grep -o '0x[0-9a-f]\{8\}' | head -1 || true)
-assert_eq "ZeroInputAmounts selector" "$ZERO_INPUTS_EXPECTED" "$ZERO_INPUTS_ACTUAL"
+# A regression here would silently ship a different revert; the selectors are what integrators match.
+ZERO_GAS_EXPECTED=$(cast sig "ZeroGasLimit()")
+ZERO_GAS_ACTUAL=$(cast call "$BT" "batchTransferNative(address[],uint256[],uint256)" \
+    "[$R1]" "[1]" 0 --rpc-url "$RPC_URL" 2>&1 | grep -o '0x[0-9a-f]\{8\}' | head -1 || true)
+assert_eq "ZeroGasLimit selector" "$ZERO_GAS_EXPECTED" "$ZERO_GAS_ACTUAL"
 
-AMOUNT_EXCEEDED=$(cast call "$ZAP" \
-    'quoteZapToken(address,address,uint256,uint256)(bool,bool,address,address,uint256,uint256,uint256,uint256,uint256,uint256,uint256)' \
-    "$TOKEN" "$WETH" 5192296858534827628530496329220096 0 --rpc-url "$RPC_URL" 2>&1 || true)
-assert_contains "AmountExceeded carries the amount and the limit" "AmountExceeded(" "$AMOUNT_EXCEEDED"
+VALUE_MISMATCH=$(cast call "$BT" "batchTransferNative(address[],uint256[],uint256)" \
+    "[$R1]" "[1]" 50000 --rpc-url "$RPC_URL" 2>&1 || true)
+assert_contains "NativeValueMismatch carries both totals" "NativeValueMismatch(" "$VALUE_MISMATCH"
 
 # --- summary ----------------------------------------------------------------------------------
 

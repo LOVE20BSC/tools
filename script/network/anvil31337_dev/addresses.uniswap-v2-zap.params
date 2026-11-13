@@ -1,3 +1,0 @@
-# Written by 12_deploy_uniswap_v2_zap.sh after a successful deploy, and asserted by
-# 22_check_uniswap_v2_zap.sh: the key set must equal the expected contract set exactly.
-UNISWAP_V2_ZAP_ADDRESS=

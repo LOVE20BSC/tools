@@ -22,40 +22,47 @@ fail_on_revert = false
 [lint]
 severity = ["high", "med", "low"]
 ignore = ["test/**/*.sol"]
-# missing-zero-check: 两个合约都不在这个 lint 的作用面上——BatchTransfer 没有构造函数，因此没有
-# 「构造期不校验零值」的位置；UniswapV2Zap 有构造函数，且它确实校验了（ZeroRouter / ZeroFactory /
-# ZeroWrappedNativeToken）。部署期的静态校验按 dev-standards §5.7 / §6.3 归部署脚本。这一条因此
-# 不需要写进 exclude_lints。
-#
-# exclude_lints 是仓级配置，同时作用于两个合约，所以每条理由必须覆盖两者。下面按实测的告警位置给：
-# BatchTransfer.sol:25/126/155 与 UniswapV2Zap.sol:70/112/423 是 calls-loop 与 reentrancy-events
-# 的实际命中点（把 exclude_lints 清空后跑 `forge lint` 可复现：calls-loop 3 条、reentrancy-events
-# 4 条、unused-return 1 条）。
-# - calls-loop（仅 BatchTransfer）：batchTransferNative 逐个 call 付款、_erc20BalanceOf 逐个
-#   balanceOf、_safeTransferFrom 逐个 transferFrom。对一批外部地址循环调用就是「批量工具」的定义
-#   行为；每次都必须拿到最新外部状态，无法合并成一次调用。UniswapV2Zap 没有循环，不受这条影响。
-# - reentrancy-events（两个合约都命中）：这条 lint 问的是「事件发出前有没有经过外部调用，以及重入
-#   能否借此伪造或重排链下依赖的日志」。两个合约的答案都是否，但理由不同：
-#     · BatchTransfer 无状态、无 owner、不托管资产，事件前没有任何写操作，重入无法伪造可信状态；
-#       事件只由 msg.sender 与已验证入参构成，重入最多把这笔如实发生的事实重复记录一次。
-#     · UniswapV2Zap 有重入锁（OZ ReentrancyGuard 的 ERC-7201 命名空间槽，见
-#       `forge inspect UniswapV2Zap storage`——标准布局里看不到它），两个入口都是 nonReentrant，
-#       且事件在函数末尾一次性发出、载荷来自本函数算出的结果，重入无法插入第二个 zap。
-# - unused-return（仅 BatchTransfer）：批量入口有意忽略部分 tuple 返回值（只判 call 的 success、
-#   余额查询只看 data 长度），被忽略的分量在同一函数内单独校验。本类当前实际告警数 0，保留它是
-#   为防止后续改动引入忽略返回值时静默通过。
-#
-# arbitrary-send-eth 与 return-bomb 不在全局列表里：它们分别在 src/BatchTransfer.sol 与
-# src/UniswapV2Zap.sol 的原生币转发处用 `forge-lint: disable-next-line(...)` 精确抑制。
-exclude_lints = ["calls-loop", "reentrancy-events", "unused-return"]
+exclude_lints = ["calls-loop", "reentrancy-events"]
 
-# 若要把 calls-loop 收紧为行内抑制（当前未执行，待评审决定）：
-# 1. 从 exclude_lints 里删掉 "calls-loop"（保留另外两项）；
-# 2. 在下列三处的语句前各加一行 `// forge-lint: disable-next-item(calls-loop)`：
-#    - batchTransferNative 里的 `(bool success, bytes memory data) =` 之前
-#      （注意：该行上方已有 arbitrary-send-eth / return-bomb 的 disable-next-line，两行可共存）；
-#    - _erc20BalanceOf 里的 `(bool success, bytes memory data) =` 之前；
-#    - _safeTransferFrom 里的 `(bool success, bytes memory data) =` 之前。
-# 3. 用 `forge lint` 验证零告警。实测（Foundry 1.8.1）此方案可行：calls-loop 必须用
-#    disable-next-item 挂在多行赋值语句（`= token.call(...)`）之前才生效，挂在被调用的那一行
-#    上方（disable-next-line 或 item）都不生效；这是该 lint 按 AST 节点定位抑制点导致的。
+# 本节只描述 BatchTransfer——本仓唯一的合约，也是唯一被 lint 的源码。
+#
+# severity：只拦截 high/med/low 三档，不把 info/gas 档的 note 当门禁。Foundry 1.8.1 的默认值恰好
+# 也是这三档，这里显式写出是为了钉死门禁：默认值若在升级中放宽，note 会悄悄变成失败项。实测当前
+# 源码在 info 档还有 11 条 note（low-level-calls / literal-instead-of-constant 等），它们不构成缺陷，
+# 因此不进 severity 也不进 exclude_lints。
+#
+# ignore：test/ 整体不参与 lint。断言用的 mock 故意做真实合约不该做的事——持有原生币却不转出
+# （locked-ether）、无事件改 allowance（missing-events-access-control）、把 uint256 截成小类型
+# （unsafe-typecast）、不检查 address 参数零值（missing-zero-check）、忽略调用的返回值
+# （unused-return，29 条）。这些是测试夹具的构造需要，不是可整改项；实测清空 ignore 后
+# `forge lint` 报 43 条告警，全部落在 test/BatchTransfer.t.sol 与 test/mocks/BatchTransferMocks.sol。
+#
+# exclude_lints：只有两项，理由逐条对应源码位置（清空 exclude_lints 并保留 ignore 后
+# `forge lint` 可复现同样的 5 条：calls-loop 3 条、reentrancy-events 2 条）。
+#
+# - calls-loop（3 条：src/BatchTransfer.sol:26 / :133 / :173）
+#   batchTransferNative 逐个 call 付款、_erc20BalanceOf 逐个 balanceOf、_safeTransferFrom 逐个
+#   transferFrom。「对一批外部地址循环调用」就是批量工具的定义行为，不是可合并成一次调用的写法：
+#   每个收款方与每个被查询账户都必须单独取到最新外部状态，合并会改变语义。三条命中点都在循环体内，
+#   gas 上限由调用方的 gasLimit 逐笔约束，批量大小由调用方付 gas 决定。
+#   —— 这条只有 BatchTransfer 会命中（本仓已无第二个合约）。
+#
+# - reentrancy-events（2 条：src/BatchTransfer.sol:34 / :66）
+#   这条 lint 问的是「事件发出前经过外部调用，重入能否借此伪造或重排链下依赖的日志」。本合约的答案
+#   是否：它无状态、无 owner、不托管资产，事件前没有任何写操作，重入无法伪造可信状态；两个事件都
+#   在函数末尾一次性发出，载荷只由 msg.sender 与已验证入参构成，重入最多把「这笔确实发生了」
+#   如实重复记录一次，改不掉事实。不发事件反而更差：见 README「事件设计」一节。
+#
+# 不在 exclude_lints 里、改用行内 `forge-lint: disable-next-line` 精确抑制的三类（位置见 src/）：
+#
+# - arbitrary-send-eth（1 处，src/BatchTransfer.sol:25）与 return-bomb（2 处，:25 / :172）：
+#   前者是原生币转发那一行——收款方本来就是调用方给的清单，限制目标等于废掉工具本身；后者是
+#   有意保留完整返回数据（keccak256 才是可诊断的部分）。这两类挂在整个文件的全局列表里会连未来
+#   新增的无关调用一起放过，因此逐行抑制。实测删掉这两行抑制后 `forge lint` 报 1 条
+#   arbitrary-send-eth 与 2 条 return-bomb。
+# - require-revert-in-loop（6 处，:29 / :110 / :114 / :136 / :176 / :181）：逐笔失败必须带上失败
+#   元素的下标，构造错误要用到循环变量，不能提到循环外。实测删掉这 6 行抑制后报 6 条。
+#
+# missing-zero-check 不写进 exclude_lints：本合约没有构造函数，因此不存在「构造期不校验零值」
+# 的位置；零地址入参另有运行期检查（ZeroRecipient / TokenNotContract）。部署期的静态校验按
+# dev-standards §5.7 / §6.3 归部署脚本。
