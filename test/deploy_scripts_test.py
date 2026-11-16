@@ -469,9 +469,10 @@ def behavioural_checks() -> int:
             checks += 1
             return result, log
 
-        def write_account(password_line=""):
+        def write_account(password_line="", api_key="test-key"):
             network.joinpath(".account").write_text(
-                "KEYSTORE_ACCOUNT=test-keystore\nACCOUNT_ADDRESS=0x" + "f5" * 20 + "\n" + password_line)
+                "KEYSTORE_ACCOUNT=test-keystore\nACCOUNT_ADDRESS=0x" + "f5" * 20 + "\n"
+                + "ETHERSCAN_API_KEY=" + api_key + "\n" + password_line)
 
         def collect_kept_log(output: str) -> None:
             """Post-broadcast failures keep the deploy log for manual recovery; assert it, then drop it."""
@@ -621,7 +622,7 @@ def behavioural_checks() -> int:
         (root / "script/network/verifier.params").write_text(
             "ETHERSCAN_VERIFIER_URL=https://api.etherscan.io/v2/api\nVERIFY_SKIP_CHAIN_IDS=\n")
         network.joinpath("network.params").write_text(
-            "CHAIN_ID=31337\nRPC_URL=http://invalid.local\nETHERSCAN_API_KEY=test-key\n")
+            "CHAIN_ID=31337\nRPC_URL=http://invalid.local\n")
         _, log = run("31_verify_batch_transfer.sh")
         verify_calls = [call for call in log if call[:2] == ["forge", "verify-contract"]]
         assert len(verify_calls) == 1, log
@@ -631,8 +632,8 @@ def behavioural_checks() -> int:
         run("31_verify_batch_transfer.sh", False, VERIFY_FAIL="1")
 
         # 18. A missing API key fails before any verification request is sent.
-        network.joinpath("network.params").write_text("CHAIN_ID=31337\nRPC_URL=http://invalid.local\n")
-        result, log = run("31_verify_batch_transfer.sh", False)
+        write_account(api_key="")
+        result, log = run("31_verify_batch_transfer.sh", False, ETHERSCAN_API_KEY="inherited-key")
         assert "ETHERSCAN_API_KEY" in result.stdout + result.stderr, result.stdout + result.stderr
         assert not any(call[:2] == ["forge", "verify-contract"] for call in log), log
 

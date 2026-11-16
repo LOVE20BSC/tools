@@ -47,6 +47,11 @@ if [ "$actual_keys" != "$(printf '%s\n' $expected_keys | sort | tr '\n' ' ')" ];
 fi
 
 params_load "$NETWORK_DIR/network.params"
+if [ -f "$NETWORK_DIR/.account" ]; then
+    set -a
+    source "$NETWORK_DIR/.account"
+    set +a
+fi
 params_load "$NETWORK_DIR/batch-transfer.params"
 params_load "$NETWORK_DIR/addresses.batch-transfer.params"
 

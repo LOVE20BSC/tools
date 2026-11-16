@@ -79,7 +79,6 @@ APPLESCRIPT
 fi
 
 echo "=== Deploying BatchTransfer to $network ==="
-echo "  RPC_URL: $RPC_URL"
 echo "  CHAIN_ID: $CHAIN_ID"
 echo "  BatchTransfer has no constructor parameters"
 

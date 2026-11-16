@@ -23,8 +23,8 @@ script/
 └── network/
     ├── verifier.params                     # 开源验证端点与跳过链（所有网络共用一份）
     └── anvil31337_dev/                     # 本地 anvil · dev
-        ├── .account                        # 账户信息（敏感，已 gitignore）
-        ├── network.params                  # 网络参数：CHAIN_ID、RPC_URL、ETHERSCAN_API_KEY
+        ├── .account                        # 账户与私密配置（已 gitignore）
+        ├── network.params                  # 网络参数：CHAIN_ID、公开 RPC_URL
         ├── batch-transfer.params           # BatchTransfer 参数（无构造参数，文件只含注释）
         └── addresses.batch-transfer.params # BatchTransfer 地址（键名 BATCH_TRANSFER_ADDRESS）
 ```
@@ -36,7 +36,7 @@ script/
 | `one_click_deploy_batch_transfer.sh` | 纯编排：解析一次 keystore 密码 → 备份旧地址文件 → 依次跑 `11` / `21` / `31` → 校验失败时回滚地址文件并退出非零。不 source 任何配置文件，也不重复各步骤的校验。 |
 | `11_deploy_batch_transfer.sh` | 自载入 `network.params` / `batch-transfer.params` / `.account`，核对链 ID，用 `--password-file`（权限 600 的临时文件）调 `forge script` 广播；从部署日志取 `BATCH_TRANSFER_ADDRESS=`，核对本次运行刷新过 `broadcast/DeployBatchTransfer.s.sol/<chain-id>/run-latest.json`，最后**原子替换**地址文件（同目录临时文件 + `mv`）。 |
 | `21_check_batch_transfer.sh` | 独立、只读、可重复：断言地址文件键集合恰好是 `BATCH_TRANSFER_ADDRESS`，核对链 ID，`cast code` 确认有代码，并把部署字节码与本地构建产物逐字节比对（合约不暴露任何部署期常量，`gasLimit` 是调用入参）。地址为空/零地址/格式非法时在触链之前就失败。 |
-| `31_verify_batch_transfer.sh` | 自载入 `network.params` / `verifier.params` / 地址文件，链 ID 列在 `VERIFY_SKIP_CHAIN_IDS` 时跳过并返回 0，否则用 `ETHERSCAN_VERIFIER_URL` + `ETHERSCAN_API_KEY` 提交 `forge verify-contract`。BatchTransfer 无构造参数，不传 `--constructor-args`。 |
+| `31_verify_batch_transfer.sh` | 自载入 `.account` / `network.params` / `verifier.params` / 地址文件，链 ID 列在 `VERIFY_SKIP_CHAIN_IDS` 时跳过并返回 0，否则用 `ETHERSCAN_VERIFIER_URL` + `ETHERSCAN_API_KEY` 提交 `forge verify-contract`。BatchTransfer 无构造参数，不传 `--constructor-args`。 |
 | `DeployBatchTransfer.s.sol` | 部署与部署期校验：`_loadConfig` 只读 `CHAIN_ID`（合约无构造参数），`_validateConfig` 在 `startBroadcast()` 前核对 `block.chainid`，`_validateDeployment` 在 `stopBroadcast()` 后确认有代码，最后打印 `BATCH_TRANSFER_ADDRESS=<addr>` 供 `11` 提取。 |
 
 三个步骤脚本统一 `<step>.sh <network>` 一种调用形态，各自载入自己需要的文件，**没有任何文件互相 source**，因此任一步都可以脱离入口单独执行。
@@ -83,6 +83,7 @@ cd tools
 KEYSTORE_ACCOUNT=anvil_account
 ACCOUNT_ADDRESS=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 KEYSTORE_PASSWORD=anvil
+ETHERSCAN_API_KEY=  # 实际开源验证时必填，本地跳过无需填写
 ```
 
 本地链与公共网络统一走 keystore 签名，不提供 `--unlocked` 回退。`KEYSTORE_PASSWORD` 非空时部署全程无交互；留空或未配时由 macOS `osascript` 弹窗读取一次。非 macOS 环境没有 `osascript`，必须填写该项，脚本会在缺失时明确报错。密码不进进程参数：`11_deploy_batch_transfer.sh` 写入权限 600 的临时文件并用 `--password-file` 交给 forge，广播结束后删除。
@@ -97,8 +98,6 @@ KEYSTORE_PASSWORD=anvil
 CHAIN_ID=31337
 RPC_URL=http://127.0.0.1:8545
 
-# 开源验证凭据：为空时 31_verify_batch_transfer.sh 直接失败，而不是静默跳过
-ETHERSCAN_API_KEY=
 ```
 
 ### 3. 配置本模块参数
@@ -162,3 +161,5 @@ forge test
 python3 test/deploy_scripts_test.py      # 部署脚本回归：不联网、不广播
 script/e2e/anvil_e2e.sh                  # 端到端：起链 → 部署 → 实调 → 还原
 ```
+
+公开参数和地址会随仓库发布到 GitHub Pages。`network.params` 的 `RPC_URL` 只填公开节点；验证 API Key、密码和带凭据的私有 RPC 统一写入已忽略的 `.account`，其中 `RPC_URL` 可覆盖公开节点。部署步骤必需 `.account`；只读校验在它存在时读取；验证步骤仅在实际提交验证时要求其中的 `ETHERSCAN_API_KEY`，不接受环境变量补位。
